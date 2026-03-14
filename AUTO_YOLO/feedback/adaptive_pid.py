@@ -28,3 +28,13 @@ class AdaptivePID:
 
         return self.kp, self.ki, self.kd
 #pid para velocidad,error de linea 
+
+def lane_control(frame, lines, desviacion):
+    # Control proporcional para corrección de desviación
+    kp_lane = 0.5
+    control = kp_lane * desviacion
+
+    # Limitar el control a un rango razonable
+    control = max(-30, min(30, control))
+    pwm = 50 + control  # Base PWM de 50, ajustada por el control
+    return control
