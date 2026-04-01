@@ -1,226 +1,212 @@
 # -*- coding: utf-8 -*-
+
 import time
 import matplotlib.pyplot as plt
 import cv2
 import numpy as np
 import RPi.GPIO as GPIO
-import serial
+import pygame
+
+import board
+import busio
+import adafruit_vl53l0x
 
 from pid.pid_controller import PID
 from detector.detector import obtener_distancia
 from fsm.state_machine import StateMachine
 from feedback.adaptive_pid import AdaptivePID
+from motor.pwm_controller import PWMController
+
+# 🔥 NUEVO
+from vision.lane_detector import detectar_carril
 
 # =====================================
 # CONTROLADORES
 # =====================================
+
 pid = PID(0.6, 0.2, 0.05)
 adaptativo = AdaptivePID()
 fsm = StateMachine()
 
 # =====================================
-# PICAMERA2 (Raspberry Pi CSI)
+# CAMARA USB
 # =====================================
-from picamera2 import Picamera2
 
-picam2 = Picamera2()
+usar_camara = False
 
-config = picam2.create_preview_configuration(
-    main={"format": "BGR888", "size": (640, 480)}
-)
-picam2.configure(config)
-picam2.start()
+try:
+    cap = cv2.VideoCapture(0)
 
-print("Camara iniciada con Picamera2")
-print("Presiona Q para salir")
+    if cap.isOpened():
+        usar_camara = True
+        print("✅ Webcam USB detectada")
 
-cv2.namedWindow("AUTO YOLO PID", cv2.WINDOW_NORMAL)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+        cv2.namedWindow("AUTO YOLO PID", cv2.WINDOW_NORMAL)
+    else:
+        print("⚠️ Webcam NO detectada → simulacion")
+
+except:
+    print("⚠️ Error con la webcam → simulacion")
 
 # =====================================
-# GPIO LEDs
+# GPIO
 # =====================================
+
 GPIO.setmode(GPIO.BCM)
 
-LED_ROJO = 17
-LED_AMARILLO = 27
-LED_VERDE = 22
+PWM_PIN = 18
+DIR_PIN = 23
 
-GPIO.setup(LED_ROJO, GPIO.OUT)
-GPIO.setup(LED_AMARILLO, GPIO.OUT)
-GPIO.setup(LED_VERDE, GPIO.OUT)
+GPIO.setup(DIR_PIN, GPIO.OUT)
+GPIO.setup(PWM_PIN, GPIO.OUT)
+
+pwmA = GPIO.PWM(PWM_PIN, 1000)
+pwmA.start(0)
+
+pwm_control = PWMController(step=3)
+
+def motor(vel, direccion):
+
+    if direccion == "adelante":
+        GPIO.output(DIR_PIN, GPIO.HIGH)
+
+    elif direccion == "atras":
+        GPIO.output(DIR_PIN, GPIO.LOW)
+
+    elif direccion == "stop":
+        pwmA.ChangeDutyCycle(0)
+        return
+
+    pwmA.ChangeDutyCycle(vel)
 
 # =====================================
-# SERIAL VL53L0X
+# SENSOR
 # =====================================
+
 try:
-    ser = serial.Serial("/dev/ttyUSB0", 115200, timeout=0.01)
-    print("Serial sensores conectado")
+    i2c = busio.I2C(board.SCL, board.SDA)
+    sensor = adafruit_vl53l0x.VL53L0X(i2c)
+    print("Sensor OK")
 except:
-    ser = None
-    print("WARNING: No se pudo abrir serial")
+    sensor = None
+    print("⚠️ Sensor no detectado")
 
-# Variables globales ToF
 dist_delante = None
-dist_atras = None
 
 # =====================================
-# UMBRALES
+# PARAMETROS
 # =====================================
-STOP_CERCA = 40
-STOP_LEJOS = 120
 
-TOF_FRENO_DELANTE = 300  # mm
-TOF_ALERTA_ATRAS = 150   # mm
-
-# =====================================
-# VARIABLES DEL SISTEMA
-# =====================================
-velocidad = 80
+velocidad = 0
 dt = 0.1
-t = 0
-
-hist_v = []
-hist_s = []
-hist_t = []
 
 # =====================================
-# LOOP PRINCIPAL
+# CONTROL
 # =====================================
+
+pygame.init()
+pygame.joystick.init()
+
+joystick = None
+if pygame.joystick.get_count() > 0:
+    joystick = pygame.joystick.Joystick(0)
+    joystick.init()
+    print("🎮 Control conectado")
+
+activo = False
+
+# =====================================
+# LOOP
+# =====================================
+
 try:
     while True:
-        # ===== CAPTURA DE FRAME =====
-        frame = picam2.capture_array()
 
-        if frame is None:
-            print("Frame vacio")
-            time.sleep(0.05)
+        pygame.event.pump()
+
+        if joystick:
+            if joystick.get_button(2):
+                activo = True
+
+            if joystick.get_button(0):
+                activo = False
+                motor(0, "stop")
+                continue
+
+        if not activo:
+            motor(0, "stop")
+            time.sleep(dt)
             continue
 
-        # Fix canales
-        if len(frame.shape) == 3 and frame.shape[2] == 4:
-            frame = frame[:, :, :3]
-
-        # Correcci�n color
-        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-
-        # =====================================
-        # LECTURA SERIAL SENSORES ToF
-        # =====================================
-        if ser and ser.in_waiting:
+        # SENSOR
+        if sensor:
             try:
-                linea = ser.readline().decode().strip()
-                if linea:
-                    d1, d2 = linea.split(",")
-                    dist_delante = int(d1)
-                    dist_atras = int(d2)
+                dist_delante = sensor.range
             except:
-                pass
+                dist_delante = None
 
-        # DEBUG opcional
-        # print("TOF:", dist_delante, dist_atras)
+        # CAMARA
+        if usar_camara:
 
-        # ===== YOLO =====
-        dist_stop, semaforo, zona, cx = obtener_distancia(frame)
+            ret, frame = cap.read()
+            if not ret:
+                continue
 
-        # =====================================
-        # CONTROL LEDs POR STOP VISUAL
-        # =====================================
-        if dist_stop is None:
-            GPIO.output(LED_VERDE, GPIO.HIGH)
-            GPIO.output(LED_AMARILLO, GPIO.LOW)
-            GPIO.output(LED_ROJO, GPIO.LOW)
+            # YOLO / señales
+            dist_stop, semaforo, _, cx_obj = obtener_distancia(frame)
 
-        elif dist_stop < STOP_CERCA:
-            GPIO.output(LED_VERDE, GPIO.LOW)
-            GPIO.output(LED_AMARILLO, GPIO.LOW)
-            GPIO.output(LED_ROJO, GPIO.HIGH)
+            # 🔥 CARRIL
+            cx_carril, frame = detectar_carril(frame)
 
-        elif dist_stop < STOP_LEJOS:
-            GPIO.output(LED_VERDE, GPIO.LOW)
-            GPIO.output(LED_AMARILLO, GPIO.HIGH)
-            GPIO.output(LED_ROJO, GPIO.LOW)
+            if cx_carril is not None:
+                centro = frame.shape[1] // 2
+                error_dir = cx_carril - centro
+            else:
+                error_dir = 0
+
+            print(f"Error carril: {error_dir}")
+
+            cv2.imshow("AUTO YOLO PID", frame)
+            cv2.waitKey(1)
 
         else:
-            GPIO.output(LED_VERDE, GPIO.HIGH)
-            GPIO.output(LED_AMARILLO, GPIO.LOW)
-            GPIO.output(LED_ROJO, GPIO.LOW)
+            dist_stop = None
+            semaforo = None
 
-        # ===== FSM =====
-        fsm.evaluar(dist_stop, semaforo)
-        setpoint, estado_txt = fsm.accion()
+        # FSM
+        fsm.evaluar(dist_stop, semaforo, dist_delante)
+        setpoint, _ = fsm.accion()
 
-        # ===== PRIORIDAD SEMAFORO =====
-        if semaforo == "red":
-            setpoint = 0
-            estado_txt += " | ROJO"
-        elif semaforo == "yellow":
-            setpoint = min(setpoint, 30)
-            estado_txt += " | AMARILLO"
-        elif semaforo == "green":
-            estado_txt += " | VERDE"
-
-        # =====================================
-        # SEGURIDAD ToF (ANTI-CHOQUE REAL)
-        # =====================================
-        if dist_delante is not None and dist_delante < TOF_FRENO_DELANTE:
-            setpoint = 0
-            estado_txt += " | STOP TOF DELANTE"
-
-        if dist_atras is not None and dist_atras < TOF_ALERTA_ATRAS:
-            estado_txt += " | OBSTACULO ATRAS"
-
-        # ===== ERROR =====
+        # PID velocidad
         error = setpoint - velocidad
 
-        # ===== PID ADAPTATIVO =====
         kp, ki, kd = adaptativo.actualizar(error)
         pid.update_gains(kp, ki, kd)
 
-        # ===== PID =====
         control = pid.compute(error, dt)
 
-        # ===== PLANTA =====
         velocidad += control * dt
         velocidad = max(0, min(100, velocidad))
 
-        # ===== HISTORIAL =====
-        hist_v.append(velocidad)
-        hist_s.append(setpoint)
-        hist_t.append(t)
-        t += dt
+        velocidad = pwm_control.update(velocidad)
 
-        # ===== VISUAL =====
-        cv2.putText(frame, f"Estado: {estado_txt}", (30, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+        if velocidad > 0:
+            motor(velocidad, "adelante")
+        else:
+            motor(0, "stop")
 
-        cv2.putText(frame, f"Vel: {velocidad:.1f}", (30, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-        cv2.putText(frame, f"Semaforo: {semaforo}", (30, 120),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-
-        cv2.putText(frame, f"Zona: {zona}", (30, 160),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
-
-        cv2.putText(frame,
-                    f"TOF D:{dist_delante} A:{dist_atras}",
-                    (30, 200),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 255), 2)
-
-        cv2.imshow("AUTO YOLO PID", frame)
-
-        # ===== SALIR =====
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+        print(f"Vel={velocidad:.1f}")
 
         time.sleep(dt)
 
 finally:
-    picam2.stop()
-    cv2.destroyAllWindows()
-    GPIO.cleanup()
 
-    plt.plot(hist_t, hist_v, label="Velocidad")
-    plt.plot(hist_t, hist_s, "--", label="Setpoint")
-    plt.legend()
-    plt.show()
+    if usar_camara:
+        cap.release()
+        cv2.destroyAllWindows()
+
+    pwmA.stop()
+    GPIO.cleanup()

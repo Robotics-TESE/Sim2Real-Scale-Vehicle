@@ -1,65 +1,49 @@
-# ===== ESTADOS =====
-RUTA_LIBRE = 0
-STOP_LEJOS = 1
-STOP_CERCA = 2
-EMERGENCIA = 3
-SEMAFORO_ROJO = 4
-SEMAFORO_AMARILLO = 5
+from fsm.semaforo_fsm import SemaforoFSM
+from fsm.stop_fsm import StopFSM
+from fsm.sensor_fsm import SensorFSM
 
 
 class StateMachine:
 
     def __init__(self):
-        self.estado = RUTA_LIBRE
 
-    def evaluar(self, dist_stop, semaforo):
+        self.semaforo_fsm = SemaforoFSM()
+        self.stop_fsm = StopFSM()
+        self.sensor_fsm = SensorFSM()
 
-        # ===== PRIORIDAD SEMAFORO =====
-        if semaforo == "red":
-            self.estado = SEMAFORO_ROJO
-            return self.estado
+        self.setpoint = 90
+        self.estado_txt = "RUTA LIBRE"
 
-        if semaforo == "yellow":
-            self.estado = SEMAFORO_AMARILLO
-            return self.estado
+    def evaluar(self, dist_stop, semaforo, dist_sensor):
 
-        # ===== LOGICA STOP =====
-        if dist_stop is None:
-            self.estado = RUTA_LIBRE
-            return self.estado
+        # ===== EVALUAR SUBMAQUINAS =====
 
-        if dist_stop < 10:
-            self.estado = EMERGENCIA
-        elif dist_stop < 25:
-            self.estado = STOP_CERCA
-        elif dist_stop < 50:
-            self.estado = STOP_LEJOS
-        else:
-            self.estado = RUTA_LIBRE
+        self.semaforo_fsm.evaluar(semaforo)
+        self.stop_fsm.evaluar(dist_stop)
+        self.sensor_fsm.evaluar(dist_sensor)
 
-        return self.estado
+        sp_sem, txt_sem = self.semaforo_fsm.accion()
+        sp_stop, txt_stop = self.stop_fsm.accion()
+        sp_sensor, txt_sensor = self.sensor_fsm.accion()
+
+        # ===== PRIORIDAD JERARQUICA =====
+
+        # 1 SENSOR (seguridad maxima)
+        if sp_sensor is not None:
+            self.setpoint = sp_sensor
+            self.estado_txt = txt_sensor
+            return
+
+        # 2 SEMAFORO
+        if sp_sem is not None:
+            self.setpoint = sp_sem
+            self.estado_txt = txt_sem
+            return
+
+        # 3 STOP
+        self.setpoint = sp_stop
+        self.estado_txt = txt_stop
 
     def accion(self):
 
-        match self.estado:  # ← IMPORTANTE: con .estado y :
-
-            case 0:
-                return 90, "RUTA LIBRE"
-
-            case 1:
-                return 50, "STOP LEJOS"
-
-            case 2:
-                return 20, "STOP CERCA"
-
-            case 3:
-                return 0, "EMERGENCIA"
-
-            case 4:
-                return 0, "SEMAFORO ROJO"
-
-            case 5:
-                return 40, "SEMAFORO AMARILLO"
-
-            case _:
-                return 90, "RUTA LIBRE"
+        return self.setpoint, self.estado_txt
