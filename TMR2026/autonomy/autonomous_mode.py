@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-autonomous_mode.py — Controlador autónomo principal.
+autonomous_mode.py — Controlador autónomo TMR 2026.
 
-Estados internos:
-  LANE_FOLLOWING   → seguimiento normal del carril.
-  APPROACHING_STOP → señal STOP detectada, frenado progresivo.
-  STOPPED_WAIT     → parado frente a la señal, contando 5 s.
-  RESUMING         → aceleración gradual tras la pausa.
-  PARKING          → delega en ParkingManeuver.
-  OBSTACLE_HOLD    → obstáculo inesperado, parado hasta que desaparece.
+Estados:
+  LANE_FOLLOWING    → seguimiento normal del carril
+  APPROACHING_STOP  → señal STOP detectada, frenado progresivo
+  STOPPED_WAIT      → parado frente a STOP, contando 5 s
+  RESUMING          → aceleración gradual tras pausa
+  CROSSWALK_STOP    → crucero peatonal detectado, pausa 3 s
+  CROSSWALK_RESUME  → reanudando tras crucero
+  PARKING           → delega en ParkingManeuver
+  OBSTACLE_HOLD     → obstáculo inesperado por ToF
 
-Reglas TMR 2026 implementadas:
-  * Velocidad modulada: aceleración en rectas, reducción en curvas.
-  * Señal STOP: frenar a ≤30 cm, esperar 5 s, reanudar.
-  * LED parpadeante durante la pausa de STOP.
-  * Estacionamiento en batería con cinemática Ackermann.
+Distancia a señal STOP:
+  Prioridad 1: VL53L0X frontal (si está disponible)
+  Prioridad 2: Estimación por tamaño del bbox en la imagen (siempre disponible)
+  Fórmula bbox: d = (altura_real * focal) / altura_px
 """
 
 import time
@@ -32,6 +33,8 @@ from config import (
     VEL_STOP_KP, VEL_STOP_KI, VEL_STOP_KD,
     SERVO_CENTER_ANGLE,
     PIN_LED_STOP, PIN_LED_STATUS,
+    CROSSWALK_STOP_SEC,
+    STOP_SIGN_REAL_HEIGHT_M, CAMERA_FOCAL_LENGTH_PX,
 )
 from control.pid_controller import PIDController
 from vision.lane_detector import LaneData
@@ -44,33 +47,24 @@ class AutoState(Enum):
     APPROACHING_STOP = auto()
     STOPPED_WAIT     = auto()
     RESUMING         = auto()
+    CROSSWALK_STOP   = auto()
+    CROSSWALK_RESUME = auto()
     PARKING          = auto()
     OBSTACLE_HOLD    = auto()
 
 
 class AutonomousController:
-    """
-    Controlador autónomo completo para el TMR 2026.
-
-    Responsabilidades:
-      - Mantener el coche centrado en el carril (PID de dirección).
-      - Ajustar velocidad según curvatura.
-      - Ejecutar la secuencia de STOP.
-      - Delegar el estacionamiento en ParkingManeuver.
-    """
 
     def __init__(self, motor, steering):
         self.motor    = motor
         self.steering = steering
 
-        # PIDs
         self._steer_pid = PIDController(
             kp=STEER_KP, ki=STEER_KI, kd=STEER_KD,
             setpoint=0.0,
             output_limits=(-(SERVO_CENTER_ANGLE - 45), (SERVO_CENTER_ANGLE - 45)),
             integral_limits=(-20.0, 20.0),
         )
-
         self._stop_pid = PIDController(
             kp=VEL_STOP_KP, ki=VEL_STOP_KI, kd=VEL_STOP_KD,
             setpoint=STOP_TARGET_MM,
@@ -78,45 +72,45 @@ class AutonomousController:
             integral_limits=(-10.0, 10.0),
         )
 
-        # Sub-FSM de estacionamiento
         self._parking = ParkingManeuver(gap_side="right")
+        self._state   = AutoState.LANE_FOLLOWING
 
-        self._state = AutoState.LANE_FOLLOWING
-        self._stop_wait_start: float = 0.0
-        self._resume_start: float    = 0.0
-        self._led_last_toggle: float = 0.0
-        self._led_on: bool           = False
+        self._stop_wait_start: float  = 0.0
+        self._resume_start: float     = 0.0
+        self._crosswalk_start: float  = 0.0
+        self._led_last_toggle: float  = 0.0
+        self._led_on: bool            = False
 
-        # GPIOs para LEDs (ya configurados en main.py)
-        self._pin_led_stop   = PIN_LED_STOP
-        self._pin_led_status = PIN_LED_STATUS
+        # Guardar último bbox del STOP para estimación de distancia por cámara
+        self._last_stop_bbox: Optional[tuple] = None
 
-    # ----------------------------------------------------------
-    # API pública
     # ----------------------------------------------------------
     def activate(self):
-        """Prepara el controlador para comenzar a conducir."""
         self._state = AutoState.LANE_FOLLOWING
         self._steer_pid.reset()
         self._stop_pid.reset()
-        self._set_led(self._pin_led_status, True)
-        self._set_led(self._pin_led_stop,   False)
+        self._set_led(PIN_LED_STATUS, True)
+        self._set_led(PIN_LED_STOP,   False)
+        print("[AUTO] Activado")
 
     def deactivate(self):
-        """Para todo al salir del modo autónomo."""
         self.motor.brake()
         self.steering.center()
-        self._set_led(self._pin_led_status, False)
-        self._set_led(self._pin_led_stop,   False)
+        self._set_led(PIN_LED_STATUS, False)
+        self._set_led(PIN_LED_STOP,   False)
+        print("[AUTO] Desactivado")
 
     def trigger_parking(self):
-        """Activa el reto de estacionamiento (llamar desde la FSM principal)."""
         if self._state == AutoState.LANE_FOLLOWING:
             self._parking.reset()
             self._parking.start()
-            self._state = AutoState.PARKING
-            print("[AUTO] Reto de estacionamiento activado.")
+            self._transition(AutoState.PARKING)
 
+    @property
+    def current_state(self) -> AutoState:
+        return self._state
+
+    # ----------------------------------------------------------
     def update(
         self,
         lane: LaneData,
@@ -124,30 +118,23 @@ class AutonomousController:
         tof_mm: Optional[float],
         dt: float,
     ):
-        """
-        Ciclo de control principal — llamar una vez por iteración del bucle.
+        """Llamar una vez por ciclo del bucle principal."""
 
-        Parameters
-        ----------
-        lane       : LaneData         resultado del detector de carril
-        obj_result : AnalysisResult   resultado del detector de objetos
-        tof_mm     : float | None     distancia ToF en mm
-        dt         : float            tiempo desde el último ciclo (s)
-        """
+        # ── Distancia al STOP: ToF tiene prioridad, luego bbox ──
+        stop_dist_mm = self._resolve_stop_distance(obj_result, tof_mm)
 
-        # ── Emergencia global: obstáculo muy cercano (FUERA de reversa) ──
+        # ── Emergencia global por ToF ──
         if (self._state not in (AutoState.PARKING,)
                 and tof_mm is not None
                 and tof_mm < EMERGENCY_STOP_MM):
             self._transition(AutoState.OBSTACLE_HOLD)
 
         match self._state:
-
             case AutoState.LANE_FOLLOWING:
-                self._do_lane_following(lane, obj_result, tof_mm, dt)
+                self._do_lane_following(lane, obj_result, stop_dist_mm, dt)
 
             case AutoState.APPROACHING_STOP:
-                self._do_approaching_stop(lane, tof_mm, dt)
+                self._do_approaching_stop(lane, stop_dist_mm, dt)
 
             case AutoState.STOPPED_WAIT:
                 self._do_stopped_wait()
@@ -155,125 +142,165 @@ class AutonomousController:
             case AutoState.RESUMING:
                 self._do_resuming(lane, dt)
 
+            case AutoState.CROSSWALK_STOP:
+                self._do_crosswalk_stop()
+
+            case AutoState.CROSSWALK_RESUME:
+                self._do_crosswalk_resume(lane, dt)
+
             case AutoState.PARKING:
-                park_state = self._parking.update(tof_mm, self.motor, self.steering)
-                if park_state == ParkingState.PARKED:
-                    self._transition(AutoState.LANE_FOLLOWING)
-                elif park_state == ParkingState.ABORTED:
+                ps = self._parking.update(tof_mm, self.motor, self.steering)
+                if ps in (ParkingState.PARKED, ParkingState.ABORTED):
                     self._transition(AutoState.LANE_FOLLOWING)
 
             case AutoState.OBSTACLE_HOLD:
                 self.motor.brake()
                 if tof_mm is None or tof_mm >= EMERGENCY_STOP_MM + 50:
-                    # El obstáculo se retiró — retomar
                     self._transition(AutoState.LANE_FOLLOWING)
 
     # ----------------------------------------------------------
-    # Sub-estados de control
+    # Sub-estados
     # ----------------------------------------------------------
-    def _do_lane_following(self, lane, obj_result, tof_mm, dt):
-        """Seguimiento normal del carril con velocidad modulada."""
+    def _do_lane_following(self, lane, obj_result, stop_dist_mm, dt):
+        # Crucero peatonal tiene prioridad sobre STOP
+        if lane.crosswalk_detected:
+            self._transition(AutoState.CROSSWALK_STOP)
+            return
 
-        # ── Verificar señal STOP ──
-        if (obj_result.stop_sign_detected
-                and obj_result.stop_sign_distance_mm is not None
-                and obj_result.stop_sign_distance_mm < STOP_BRAKE_START_MM):
+        # Señal STOP detectada y suficientemente cerca para empezar a frenar
+        if stop_dist_mm is not None and stop_dist_mm < STOP_BRAKE_START_MM:
             self._transition(AutoState.APPROACHING_STOP)
             return
 
-        # ── Verificar semáforo ──
+        # Semáforo rojo
         if (obj_result.traffic_light is not None
                 and obj_result.traffic_light.color == "red"):
             self.motor.brake()
             self._apply_steering(lane, dt)
             return
 
-        # ── Velocidad según curvatura ──
-        speed = lane.suggested_speed
-
-        # ── Dirección ──
         self._apply_steering(lane, dt)
-        self.motor.set_throttle(speed)
+        self.motor.set_throttle(lane.suggested_speed)
 
-    def _do_approaching_stop(self, lane, tof_mm, dt):
-        """Frenado progresivo PID hasta STOP_TARGET_MM."""
-
-        # Actualizar fuente de distancia: preferir ToF cuando esté en rango útil
-        dist = tof_mm if (tof_mm is not None and tof_mm < 800) else None
-
-        if dist is None:
-            # Sin lectura de ToF — frenado abierto conservador
-            self.motor.set_throttle(SPEED_APPROACH * 0.5)
+    def _do_approaching_stop(self, lane, stop_dist_mm, dt):
+        """Frena progresivamente hasta quedar a ≤30 cm de la señal."""
+        if stop_dist_mm is None:
+            # Perdimos la señal — freno conservador
+            self.motor.set_throttle(SPEED_APPROACH * 0.4)
             self._apply_steering(lane, dt)
             return
 
-        error = dist - STOP_TARGET_MM   # + cuando aún lejos, − cuando pasado
+        error = stop_dist_mm - STOP_TARGET_MM
 
         if error <= STOP_TOLERANCE_MM:
-            # Llegamos al punto de parada
             self.motor.brake()
             self._transition(AutoState.STOPPED_WAIT)
             return
 
-        # Velocidad proporcional a la distancia restante
-        speed = self._stop_pid.compute(dist, dt)
-        self.motor.set_throttle(max(speed, 5.0))  # mínimo 5% para vencer inercia
+        # Velocidad proporcional a la distancia restante (mínimo 5%)
+        speed = self._stop_pid.compute(stop_dist_mm, dt)
+        self.motor.set_throttle(max(speed, 5.0))
         self._apply_steering(lane, dt)
 
     def _do_stopped_wait(self):
-        """Pausa de 5 s frente al STOP, con LED parpadeante."""
+        """5 segundos parado con LED parpadeante."""
         self.motor.brake()
         self.steering.center()
 
-        # Parpadeo LED
         now = time.monotonic()
-        if now - self._led_last_toggle >= (1.0 / (2 * STOP_LED_BLINK_HZ)):
+        blink_interval = 1.0 / (2 * STOP_LED_BLINK_HZ)
+        if now - self._led_last_toggle >= blink_interval:
             self._led_on = not self._led_on
-            self._set_led(self._pin_led_stop, self._led_on)
+            self._set_led(PIN_LED_STOP, self._led_on)
             self._led_last_toggle = now
 
         if now - self._stop_wait_start >= STOP_WAIT_SEC:
-            self._set_led(self._pin_led_stop, False)
+            self._set_led(PIN_LED_STOP, False)
             self._transition(AutoState.RESUMING)
-            print("[AUTO] Reanudando marcha tras STOP.")
+            print("[AUTO] Reanudando tras STOP.")
 
     def _do_resuming(self, lane, dt):
-        """Aceleración gradual tras la pausa del STOP."""
-        RAMP_TIME = 1.5  # segundos para alcanzar velocidad normal
-        elapsed   = time.monotonic() - self._resume_start
-        t         = min(elapsed / RAMP_TIME, 1.0)
-        speed     = SPEED_CURVE + t * (SPEED_STRAIGHT - SPEED_CURVE)
-
+        """Aceleración gradual tras STOP."""
+        RAMP_TIME = 1.5
+        t = min((time.monotonic() - self._resume_start) / RAMP_TIME, 1.0)
+        speed = SPEED_CURVE + t * (SPEED_STRAIGHT - SPEED_CURVE)
         self._apply_steering(lane, dt)
         self.motor.set_throttle(speed)
+        if t >= 1.0:
+            self._transition(AutoState.LANE_FOLLOWING)
 
+    def _do_crosswalk_stop(self):
+        """Para en el crucero peatonal y espera CROSSWALK_STOP_SEC."""
+        self.motor.brake()
+        self.steering.center()
+        if time.monotonic() - self._crosswalk_start >= CROSSWALK_STOP_SEC:
+            self._transition(AutoState.CROSSWALK_RESUME)
+            print("[AUTO] Reanudando tras crucero peatonal.")
+
+    def _do_crosswalk_resume(self, lane, dt):
+        """Acelera suavemente tras el crucero."""
+        RAMP_TIME = 1.0
+        t = min((time.monotonic() - self._resume_start) / RAMP_TIME, 1.0)
+        speed = SPEED_CURVE + t * (SPEED_STRAIGHT - SPEED_CURVE)
+        self._apply_steering(lane, dt)
+        self.motor.set_throttle(speed)
         if t >= 1.0:
             self._transition(AutoState.LANE_FOLLOWING)
 
     # ----------------------------------------------------------
     # Helpers
     # ----------------------------------------------------------
+    def _resolve_stop_distance(
+        self,
+        obj_result: ObjectDetector.AnalysisResult,
+        tof_mm: Optional[float],
+    ) -> Optional[float]:
+        """
+        Devuelve la mejor estimación de distancia a la señal STOP.
+        Prioridad: ToF (preciso) > bbox (siempre disponible).
+        """
+        if not obj_result.stop_sign_detected:
+            self._last_stop_bbox = None
+            return None
+
+        # ToF disponible y en rango útil
+        if tof_mm is not None and tof_mm < 1000:
+            return tof_mm
+
+        # Estimación por bbox
+        bbox = obj_result.stop_sign_bbox
+        if bbox:
+            self._last_stop_bbox = bbox
+            h_px = bbox[3] - bbox[1]   # y2 - y1
+            if h_px > 5:
+                dist_m = (STOP_SIGN_REAL_HEIGHT_M * CAMERA_FOCAL_LENGTH_PX) / h_px
+                return dist_m * 1000   # → mm
+
+        return None
+
     def _apply_steering(self, lane: LaneData, dt: float):
-        """
-        Aplica el PID de dirección.
-        error_px positivo → coche a la izquierda → corrección a la derecha (ángulo >90°).
-        """
         correction = self._steer_pid.compute(lane.error_px, dt)
-        servo_angle = SERVO_CENTER_ANGLE + correction
-        self.steering.set_angle(servo_angle)
+        self.steering.set_angle(SERVO_CENTER_ANGLE + correction)
 
     def _transition(self, new_state: AutoState):
-        """Cambia de estado y registra marcas de tiempo relevantes."""
         print(f"[AUTO] {self._state.name} → {new_state.name}")
         self._state = new_state
+        now = time.monotonic()
 
         if new_state == AutoState.STOPPED_WAIT:
-            self._stop_wait_start = time.monotonic()
+            self._stop_wait_start = now
             self._steer_pid.reset()
 
         elif new_state == AutoState.RESUMING:
-            self._resume_start = time.monotonic()
+            self._resume_start = now
             self._stop_pid.reset()
+
+        elif new_state == AutoState.CROSSWALK_STOP:
+            self._crosswalk_start = now
+            self.motor.brake()
+
+        elif new_state == AutoState.CROSSWALK_RESUME:
+            self._resume_start = now
 
         elif new_state == AutoState.LANE_FOLLOWING:
             self._steer_pid.reset()
@@ -283,8 +310,4 @@ class AutonomousController:
         try:
             GPIO.output(pin, GPIO.HIGH if state else GPIO.LOW)
         except Exception:
-            pass   # Si el GPIO no está configurado, no crashear
-
-    @property
-    def current_state(self) -> AutoState:
-        return self._state
+            pass

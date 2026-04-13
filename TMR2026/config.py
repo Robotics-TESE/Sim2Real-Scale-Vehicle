@@ -146,9 +146,18 @@ PARK_REVERSE_STRAIGHT_SEC = 1.0  # reversa derecho para centrar
 # ============================================================
 # GAMEPAD  (mapeo Xbox / PS4 genérico vía pygame)
 # ============================================================
-BTN_BACK_TO_MANUAL = 0   # A (Xbox) / Cruz  (PS4)
-BTN_VISION_TEST    = 1   # B (Xbox) / Círculo (PS4)
-BTN_AUTONOMOUS     = 2   # X (Xbox) / Cuadrado (PS4)
+#   A / Cruz      (btn 0) → Manual
+#   B / Círculo   (btn 1) → Visión Test (cámara, motores OFF)
+#   X / Cuadrado  (btn 2) → Autónomo (carril + STOP + crucero)
+#   Y / Triángulo (btn 3) → Estacionamiento
+BTN_MANUAL     = 0
+BTN_VISION     = 1
+BTN_AUTONOMOUS = 2
+BTN_PARKING    = 3
+
+# Mantener alias para compatibilidad
+BTN_BACK_TO_MANUAL = BTN_MANUAL
+BTN_VISION_TEST    = BTN_VISION
 
 AXIS_STEER    = 3   # Joystick derecho X
 AXIS_THROTTLE = 5   # Gatillo R2 (−1 = soltado, +1 = fondo)
@@ -156,6 +165,12 @@ AXIS_BRAKE    = 4   # Gatillo L2
 
 JOYSTICK_DEADBAND = 0.08
 TRIGGER_DEADBAND  = 0.05
+
+# ============================================================
+# CRUCERO PEATONAL
+# ============================================================
+CROSSWALK_STOP_SEC    = 3.0   # segundos detenido en el crucero
+CROSSWALK_WHITE_RATIO = 0.55  # fracción mínima de píxeles blancos en fila
 
 # ============================================================
 # RUTAS

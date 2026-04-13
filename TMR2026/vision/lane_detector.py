@@ -26,6 +26,7 @@ from config import (
     CURVE_THRESHOLD_RAD,
     SPEED_STRAIGHT, SPEED_CURVE,
     LANE_LOST_THRESHOLD_PX,
+    CROSSWALK_WHITE_RATIO,
 )
 
 
@@ -36,6 +37,7 @@ class LaneData:
     is_curve: bool         # True si la curvatura supera el umbral
     confidence: float      # [0, 1] — qué tan buena es la detección
     suggested_speed: float # % PWM sugerido según curvatura
+    crosswalk_detected: bool = False       # True si hay crucero peatonal al frente
     debug_image: np.ndarray | None = None  # frame anotado (solo en modo test)
 
 
@@ -122,13 +124,16 @@ class LaneDetector:
                 cx_near, cx_far, error_px
             )
 
+        crosswalk = self._detect_crosswalk(binary, roi_top)
+
         return LaneData(
-            error_px       = error_px,
-            curvature_rad  = curvature_rad,
-            is_curve       = is_curve,
-            confidence     = confidence,
-            suggested_speed = suggested_speed,
-            debug_image    = debug_img,
+            error_px          = error_px,
+            curvature_rad     = curvature_rad,
+            is_curve          = is_curve,
+            confidence        = confidence,
+            suggested_speed   = suggested_speed,
+            crosswalk_detected = crosswalk,
+            debug_image       = debug_img,
         )
 
     # ----------------------------------------------------------
@@ -174,6 +179,47 @@ class LaneDetector:
             confidence = 0.0
 
         return center, confidence
+
+    # ----------------------------------------------------------
+    # Detección de crucero peatonal
+    # ----------------------------------------------------------
+    def _detect_crosswalk(self, binary: np.ndarray, roi_top: int) -> bool:
+        """
+        Detecta un crucero peatonal (líneas blancas horizontales anchas).
+
+        Busca en la zona media del frame (entre el horizonte y el ROI de carril)
+        filas donde más del CROSSWALK_WHITE_RATIO de los píxeles sean blancos.
+        Eso indica una franja blanca que cruza todo el ancho de la pista.
+
+        Se requieren al menos 3 filas consecutivas para evitar falsos positivos.
+        """
+        # Zona de búsqueda: entre el 30% y el 55% de la altura del frame
+        search_top    = int(self._H * 0.30)
+        search_bottom = roi_top   # justo antes del ROI de carril
+
+        if search_bottom <= search_top:
+            return False
+
+        zone = binary[search_top:search_bottom, :]
+        if zone.size == 0:
+            return False
+
+        # Proporción de píxeles blancos por fila
+        row_ratios = np.sum(zone > 0, axis=1) / self._W
+
+        # Filas con alta densidad de blanco
+        white_rows = row_ratios > CROSSWALK_WHITE_RATIO
+
+        # Necesitamos al menos 3 filas consecutivas
+        consecutive = 0
+        for w in white_rows:
+            if w:
+                consecutive += 1
+                if consecutive >= 3:
+                    return True
+            else:
+                consecutive = 0
+        return False
 
     # ----------------------------------------------------------
     # Visualización de debug
