@@ -4,13 +4,13 @@ After=network.target bluetooth.target
 Wants=bluetooth.target
 
 [Service]
-User=pi
-Group=pi
-WorkingDirectory=/home/pi/Carrito/TMR2026
+User=angel01
+Group=angel01
+WorkingDirectory=/home/angel01/Carrito/TMR2026
 Environment="PYTHONUNBUFFERED=1"
 Environment="SDL_VIDEODRIVER=dummy"
 Environment="SDL_AUDIODRIVER=dummy"
-ExecStart=/usr/bin/python3 /home/pi/Carrito/TMR2026/main.py
+ExecStart=/usr/bin/python3 /home/angel01/Carrito/TMR2026/main.py
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=10s
