@@ -230,11 +230,13 @@ class CarritoTMR:
 
         # Motor
         if gp.brake > 0.05:
-            # L2 → reversa, máximo 50%
-            self.motor.set_throttle(-(gp.brake ** 2) * 50)
+            # L2 → reversa con mínimo garantizado para vencer inercia
+            duty = max((gp.brake ** 2) * 50, 25.0)
+            self.motor.set_throttle(-duty)
         elif gp.throttle > 0.05:
-            # R2 → adelante progresivo (cuadrático para suavidad)
-            self.motor.set_throttle((gp.throttle ** 1.5) * 100)
+            # R2 → adelante: mínimo 25% para que el motor realmente arranque
+            duty = max((gp.throttle ** 1.5) * 100, 25.0)
+            self.motor.set_throttle(duty)
         else:
             self.motor.disable()
 
