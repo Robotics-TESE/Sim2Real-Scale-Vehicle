@@ -43,9 +43,10 @@ class DistanceSensor:
         GPIO.output(PIN_TOF_XSHUT_REAR,  GPIO.LOW)
 
         try:
-            import board, busio, adafruit_vl53l0x
+            import adafruit_vl53l0x
+            from adafruit_extended_bus import ExtendedI2C
 
-            i2c = busio.I2C(board.D22, board.D23)
+            i2c = ExtendedI2C(4)  # /dev/i2c-4 (GPIO 22=SCL, GPIO 23=SDA)
 
             # Sensor delantero → cambiar dirección a 0x30
             GPIO.output(PIN_TOF_XSHUT_FRONT, GPIO.HIGH)

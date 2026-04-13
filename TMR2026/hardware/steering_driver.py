@@ -19,10 +19,9 @@ Geometría Ackermann implementada:
 """
 
 import math
-import board
-import busio
 import adafruit_pca9685
 from adafruit_motor import servo as adafruit_servo
+from adafruit_extended_bus import ExtendedI2C
 
 from config import (
     PCA9685_PWM_FREQ,
@@ -42,8 +41,8 @@ class SteeringDriver:
     """Control de dirección con geometría Ackermann sobre PCA9685."""
 
     def __init__(self):
-        # I²C alternativo: SCL=D1, SDA=D0
-        i2c = busio.I2C(board.D1, board.D0)
+        # Bus i2c-3 (GPIO 0=SDA, GPIO 1=SCL) creado por dtoverlay
+        i2c = ExtendedI2C(3)
         pca = adafruit_pca9685.PCA9685(i2c)
         pca.frequency = PCA9685_PWM_FREQ
 
