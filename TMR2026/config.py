@@ -62,7 +62,7 @@ CAMERA_CONTRAST   = 1.5    # [0–32]  más contraste para bordes definidos
 CAMERA_SATURATION = 1.8    # [0–32]  más saturación para colores vivos (rojo del STOP)
 CAMERA_SHARPNESS  = 4.0    # [0–16]  imagen más nítida para detección
 CAMERA_DENOISE    = 2      # 0=Off 2=CDN_Fast 3=CDN_HQ
-CAMERA_BUFFERS    = 4      # frames en buffer — más fluidez, más latencia
+CAMERA_BUFFERS    = 6      # frames en buffer — Pi 5 16 GB tiene RAM de sobra
 
 # ── Detección ────────────────────────────────────────────────
 # Umbral de confianza para aceptar detecciones del NPU

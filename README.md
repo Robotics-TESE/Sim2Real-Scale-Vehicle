@@ -6,7 +6,7 @@
 > en batería.
 
 [![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)](https://python.org)
-[![Platform](https://img.shields.io/badge/Platform-Raspberry%20Pi%205-red?logo=raspberrypi)](https://raspberrypi.com)
+[![Platform](https://img.shields.io/badge/Platform-Raspberry%20Pi%205%2016GB-red?logo=raspberrypi)](https://raspberrypi.com)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![TMR](https://img.shields.io/badge/Competencia-TMR%202026-orange)](https://tmr.org.mx)
 
@@ -145,7 +145,7 @@ stateDiagram-v2
 
 | Componente | Modelo | Interfaz | Uso |
 |---|---|---|---|
-| Computador | Raspberry Pi 5 (4 GB) | — | Procesamiento principal |
+| Computador | Raspberry Pi 5 (16 GB) | — | Procesamiento principal |
 | Cámara | Pi AI Camera (Sony IMX500) | CSI-2 | Visión + inferencia NPU |
 | Sensor distancia | VL53L0X × 2 | I²C bus 4 (GPIO 22/23) | Distancia frontal y trasera |
 | Puente H | IBT-2 | GPIO PWM | Control de motor DC |
