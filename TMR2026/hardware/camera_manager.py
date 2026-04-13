@@ -200,12 +200,15 @@ class CameraManager:
         """
         Extrae detecciones del tensor de salida del IMX500.
 
-        El modelo YOLOv8n_pp embebido en el .rpk exporta 3 tensores:
-          [0] boxes  : (1, N, 4)  coordenadas normalizadas [x1,y1,x2,y2]
-          [1] scores : (1, N)     confianza por detección
-          [2] classes: (1, N)     clase (float → int)
+        EfficientDet Lite0 _pp exporta 4 tensores (formato TensorFlow/COCO):
+          [0] boxes   : (1, N, 4)  [ymin, xmin, ymax, xmax] normalizados 0-1
+          [1] classes : (1, N)     class ID (float)
+          [2] scores  : (1, N)     confianza
+          [3] count   : (1,)       número de detecciones válidas
 
-        Si el IMX500 aún no tiene datos listos, get_outputs devuelve None.
+        NOTA: el orden boxes/classes/scores varía según el modelo compilado.
+        El código intenta el formato EfficientDet y cae al formato YOLOv8
+        si el primero falla, para ser robusto ante modelos alternativos.
         """
         np_outputs = self._imx500.get_outputs(metadata, add_batch=True)
         if np_outputs is None:
@@ -214,45 +217,57 @@ class CameraManager:
         ih, iw = img_shape[:2]
 
         try:
-            boxes   = np_outputs[0][0]   # (N, 4)
-            scores  = np_outputs[1][0]   # (N,)
-            classes = np_outputs[2][0]   # (N,)
+            # ── Formato EfficientDet (4 outputs): boxes, classes, scores, count ──
+            if len(np_outputs) >= 4:
+                boxes   = np_outputs[0][0]         # (N, 4) [y1,x1,y2,x2] norm
+                classes = np_outputs[1][0]         # (N,)
+                scores  = np_outputs[2][0]         # (N,)
+                count   = int(np_outputs[3][0])    # número real de detecciones
+                tf_format = True                   # coordenadas en [y,x,y,x]
+            else:
+                # ── Formato YOLOv8 / NanoDet (3 outputs): boxes, scores, classes ──
+                boxes   = np_outputs[0][0]
+                scores  = np_outputs[1][0]
+                classes = np_outputs[2][0]
+                count   = len(scores)
+                tf_format = False
         except (IndexError, TypeError):
             return []
 
-        # Obtener tamaño de entrada real del modelo para escalar coordenadas
-        try:
-            in_w, in_h = self._imx500.get_input_size()
-        except Exception:
-            in_w, in_h = iw, ih
-
-        scale_x = iw / in_w
-        scale_y = ih / in_h
-
         detections: list[Detection] = []
-        for box, score, cls_id in zip(boxes, scores, classes):
+        for i in range(min(count, len(scores))):
+            score  = float(scores[i])
+            cls_id = int(classes[i])
+
             if score < DETECTION_CONFIDENCE:
                 continue
 
-            cls_id = int(cls_id)
             label = self._class_map.get(cls_id, f"cls_{cls_id}")
-
             if label not in CLASSES_OF_INTEREST.values():
-                continue  # solo clases relevantes para TMR
+                continue
 
-            x1 = int(box[0] * in_w * scale_x)
-            y1 = int(box[1] * in_h * scale_y)
-            x2 = int(box[2] * in_w * scale_x)
-            y2 = int(box[3] * in_h * scale_y)
+            box = boxes[i]
+            if tf_format:
+                # [ymin, xmin, ymax, xmax] normalizados → píxeles
+                y1 = int(box[0] * ih)
+                x1 = int(box[1] * iw)
+                y2 = int(box[2] * ih)
+                x2 = int(box[3] * iw)
+            else:
+                # [xmin, ymin, xmax, ymax] normalizados → píxeles
+                x1 = int(box[0] * iw)
+                y1 = int(box[1] * ih)
+                x2 = int(box[2] * iw)
+                y2 = int(box[3] * ih)
 
-            # Sanitizar coordenadas
+            # Sanitizar
             x1, x2 = sorted([max(0, x1), min(iw - 1, x2)])
             y1, y2 = sorted([max(0, y1), min(ih - 1, y2)])
 
             detections.append(Detection(
                 label=label,
                 class_id=cls_id,
-                confidence=float(score),
+                confidence=score,
                 x1=x1, y1=y1, x2=x2, y2=y2,
             ))
 

@@ -40,7 +40,9 @@ SERVO_MAX_ANGLE     = 135.0 # grados — giro máximo derecha
 # PI AI CAMERA  (Sony IMX500 — aceleración NPU on-chip)
 # ============================================================
 # Instalar modelos: sudo apt install imx500-all
-IMX500_MODEL_PATH = "/usr/share/imx500-models/imx500_network_yolov8n_pp.rpk"
+# YOLOv8 no está en el paquete estándar — usamos EfficientDet Lite0
+# que detecta las mismas clases COCO (stop sign, traffic light, person, car)
+IMX500_MODEL_PATH = "/usr/share/imx500-models/imx500_network_efficientdet_lite0_pp.rpk"
 
 CAMERA_WIDTH  = 640
 CAMERA_HEIGHT = 480
