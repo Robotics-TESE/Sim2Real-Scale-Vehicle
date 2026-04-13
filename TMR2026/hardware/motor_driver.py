@@ -20,6 +20,11 @@ from config import PIN_MOTOR_RPWM, PIN_MOTOR_LPWM, MOTOR_PWM_FREQ
 
 _CHIP = 4   # GPIO chip Pi 5 (gpiochip4 → gpiochip0 vía symlink)
 
+# Máximo incremento de duty por llamada a set_throttle (anti-inrush de corriente).
+# A 50 Hz: 3%/tick → ~240 ms para llegar de 0% a 22% en autónomo.
+# Las decrementadas (freno/paro) siempre son instantáneas por seguridad.
+_SLEW_STEP = 3.0
+
 
 class MotorDriver:
     """Interfaz de alto nivel para el IBT-2 con enable permanente."""
@@ -46,14 +51,25 @@ class MotorDriver:
 
     def set_throttle(self, duty: float):
         """
-        Aplica potencia al motor.
+        Aplica potencia al motor con rampa de subida (anti-inrush).
 
         Parameters
         ----------
         duty : float
             [-100, 100]  >0 = avance, <0 = reversa, 0 = freno
+
+        Las bajadas de potencia (reducir o frenar) son instantáneas.
+        Las subidas están limitadas a _SLEW_STEP % por llamada para
+        evitar picos de corriente que apagan la batería.
         """
         duty = max(-100.0, min(100.0, duty))
+
+        # Slew rate: solo limitar incrementos (no decrementos ni cambio de signo)
+        if duty > self._current_duty:
+            diff = duty - self._current_duty
+            if diff > _SLEW_STEP:
+                duty = self._current_duty + _SLEW_STEP
+
         self._current_duty = duty
 
         if duty > 0:

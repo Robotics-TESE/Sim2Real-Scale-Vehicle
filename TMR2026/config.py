@@ -114,10 +114,10 @@ VEL_STOP_KD = 0.008
 # ============================================================
 # MODO AUTÓNOMO — VELOCIDADES Y UMBRALES
 # ============================================================
-# Velocidades en mínimo para calibración inicial — ajustar en pista
-SPEED_STRAIGHT   = 30   # % PWM en rectas
-SPEED_CURVE      = 20   # % PWM en curvas
-SPEED_APPROACH   = 12   # % PWM al aproximarse a señal
+# Velocidades conservadoras — subir de 5 en 5 según pruebas en pista
+SPEED_STRAIGHT   = 22   # % PWM en rectas
+SPEED_CURVE      = 15   # % PWM en curvas
+SPEED_APPROACH   = 10   # % PWM al aproximarse a señal
 
 # Umbral de curvatura para reducir velocidad (radianes del error de perspectiva)
 CURVE_THRESHOLD_RAD = 0.30

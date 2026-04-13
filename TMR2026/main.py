@@ -247,8 +247,8 @@ class CarritoTMR:
 
         elif gp.throttle > 0.05:
             # R2 → rampa muy suave: 2%/tick (50 Hz → 150 ms para llegar a 10%)
-            # Máximo 60% con R2 a fondo para no saturar la batería
-            target = max((gp.throttle ** 1.5) * 60, 10.0)
+            # Máximo 50% con R2 a fondo para no saturar la batería
+            target = max((gp.throttle ** 1.5) * 50, 8.0)
             current = abs(self.motor.duty)
             ramped  = min(current + 2.0, target)
             self.motor.set_throttle(ramped)
