@@ -1,0 +1,46 @@
+[Unit]
+Description=Carrito TMR 2026 — Sistema Autonomo
+Documentation=https://github.com/Empanaditasesina72/Carrito
+# Arrancar DESPUÉS de que el sistema de red y Bluetooth estén listos.
+# Esto garantiza que el mando BT pueda conectarse antes de que el script
+# intente inicializar pygame.joystick.
+After=network.target bluetooth.target
+Wants=bluetooth.target
+
+[Service]
+# ── Usuario ── (cambiar si no es "pi")
+User=pi
+Group=pi
+
+# ── Directorio de trabajo ──
+WorkingDirectory=/home/pi/carrito_tmr
+
+# ── Variables de entorno ──
+# DISPLAY vacío porque el sistema corre headless (sin monitor).
+# SDL_VIDEODRIVER=dummy hace que pygame no requiera servidor X.
+Environment="PYTHONUNBUFFERED=1"
+Environment="SDL_VIDEODRIVER=dummy"
+Environment="SDL_AUDIODRIVER=dummy"
+
+# ── Comando de arranque ──
+ExecStart=/usr/bin/python3 /home/pi/carrito_tmr/main.py
+
+# ── Reinicio automático ──
+# Si el script muere (error no manejado), systemd lo reinicia en 5 s.
+Restart=on-failure
+RestartSec=5s
+
+# ── Timeout de parada ──
+# Dar 10 s para el apagado limpio (GPIO.cleanup, etc.)
+TimeoutStopSec=10s
+
+# ── Limitar uso de CPU en caso de loop infinito ──
+# CPUQuota=80%   # Descomentar si se quiere limitar al 80 % de un core
+
+# ── Stdout/Stderr van al journal (ver con: journalctl -u carrito_tmr -f) ──
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=carrito_tmr
+
+[Install]
+WantedBy=multi-user.target

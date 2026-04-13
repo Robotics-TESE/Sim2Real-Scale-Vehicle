@@ -1,0 +1,31 @@
+# ============================================================
+# Dependencias del sistema TMR 2026
+# Instalar en Raspberry Pi OS Bookworm (Debian 12)
+# ============================================================
+
+# --- Paquetes APT (ejecutar PRIMERO, antes del pip install) ---
+# sudo apt update && sudo apt install -y \
+#   python3-picamera2 \
+#   python3-libcamera \
+#   imx500-all \
+#   python3-pygame \
+#   python3-rpi.gpio \
+#   python3-smbus2 \
+#   bluetooth \
+#   bluez \
+#   python3-dbus
+
+# --- Paquetes pip ---
+# (Algunos ya vienen en el sistema, se listan para referencia)
+
+# Adafruit CircuitPython (I2C, PCA9685, VL53L0X, servo)
+adafruit-circuitpython-pca9685
+adafruit-circuitpython-motor
+adafruit-circuitpython-vl53l0x
+adafruit-blinka
+
+# Visión
+opencv-python-headless>=4.8
+
+# Numpy (normalmente preinstalado)
+numpy>=1.24
