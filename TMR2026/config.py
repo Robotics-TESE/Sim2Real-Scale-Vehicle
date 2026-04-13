@@ -9,20 +9,29 @@ NO importar hardware real desde este módulo.
 # HARDWARE PINS  (RPi.GPIO, numeración BCM)
 # ============================================================
 # --- IBT-2 H-Bridge ---
-PIN_MOTOR_EN   = 24   # Enable (HIGH = habilitado)
-PIN_MOTOR_RPWM = 18   # Forward / acelerar
-PIN_MOTOR_LPWM = 13   # Reverse  / frenar
-MOTOR_PWM_FREQ = 1000 # Hz — IBT-2 acepta hasta 25 kHz
+# R_EN y L_EN conectados a 3.3V (siempre habilitado — sin GPIO de enable)
+PIN_MOTOR_RPWM = 18   # GPIO 18, Pin 12 — PWM avance
+PIN_MOTOR_LPWM = 13   # GPIO 13, Pin 33 — PWM reversa
+MOTOR_PWM_FREQ = 1000 # Hz
 
-# --- LEDs status (opcionales, conectar a GND por resistencia 220 Ω) ---
+# --- LEDs status (opcionales) ---
 PIN_LED_STOP   = 25   # Parpadea durante parada en STOP
 PIN_LED_STATUS = 26   # Estado general del sistema
 
 # ============================================================
-# I²C ALTERNATIVO  (GPIO 0 = SDA, GPIO 1 = SCL)
-# Uso: busio.I2C(board.D1, board.D0)
-# Devices en este bus: PCA9685 + VL53L0X
+# I²C BUS 3  (GPIO 0=SDA, GPIO 1=SCL) — PCA9685 servo
+# dtoverlay=i2c-gpio,bus=3,i2c_gpio_sda=0,i2c_gpio_scl=1
 # ============================================================
+
+# ============================================================
+# I²C BUS 4  (GPIO 23=SDA, GPIO 22=SCL) — VL53L0X sensores
+# dtoverlay=i2c-gpio,bus=4,i2c_gpio_sda=23,i2c_gpio_scl=22
+# ============================================================
+# Dos sensores VL53L0X en el mismo bus — se diferencian por XSHUT
+PIN_TOF_XSHUT_FRONT = 17   # GPIO 17, Pin 11
+PIN_TOF_XSHUT_REAR  = 27   # GPIO 27, Pin 13
+TOF_ADDR_FRONT      = 0x30 # dirección cambiada al inicializar
+TOF_ADDR_REAR       = 0x29 # dirección por defecto
 
 # --- PCA9685 ---
 PCA9685_I2C_ADDR   = 0x40   # Dirección por defecto
