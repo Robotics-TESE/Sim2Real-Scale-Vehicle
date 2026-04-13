@@ -356,12 +356,22 @@ class CarritoTMR:
             self.autonomous.deactivate()
 
     def _setup_leds(self):
-        for pin in (PIN_LED_STOP, PIN_LED_STATUS):
-            GPIO.setup(pin, GPIO.OUT)
-            GPIO.output(pin, GPIO.LOW)
+        try:
+            for pin in (PIN_LED_STOP, PIN_LED_STATUS):
+                GPIO.setup(pin, GPIO.OUT)
+                GPIO.output(pin, GPIO.LOW)
+            self._leds_ok = True
+        except Exception as e:
+            print(f"[WARN] LEDs no disponibles (GPIO): {e}")
+            self._leds_ok = False
 
     def _set_led(self, pin: int, state):
-        GPIO.output(pin, GPIO.HIGH if bool(state) else GPIO.LOW)
+        if not getattr(self, "_leds_ok", False):
+            return
+        try:
+            GPIO.output(pin, GPIO.HIGH if bool(state) else GPIO.LOW)
+        except Exception:
+            pass
 
     def _handle_signal(self, signum, frame):
         print(f"\n[SYS] Señal {signum} → apagando...")
