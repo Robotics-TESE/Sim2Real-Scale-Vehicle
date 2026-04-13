@@ -13,12 +13,16 @@ Manual:
   L2 (gatillo)        → reversa suave
 """
 
+import os
 import sys
 import time
 import signal
 
 import cv2
 import RPi.GPIO as GPIO
+
+# Si no hay display (SSH sin -X, sin monitor HDMI) no usamos imshow
+_HAS_DISPLAY = bool(os.environ.get("DISPLAY"))
 
 from config import (
     PIN_LED_STOP, PIN_LED_STATUS,
@@ -177,7 +181,7 @@ class CarritoTMR:
     def _set_mode(self, new_mode: str):
         if new_mode != self._mode:
             print(f"\n[FSM] {self._mode} → {new_mode}")
-            if self._mode == VehicleMode.VISION:
+            if self._mode == VehicleMode.VISION and _HAS_DISPLAY:
                 cv2.destroyAllWindows()
         self._mode = new_mode
         self._last_mode_change = time.monotonic()
@@ -190,8 +194,8 @@ class CarritoTMR:
             self._set_led(PIN_LED_STATUS, int(time.monotonic() * 2) % 2 == 0)
             return
 
-        # Motor frenado — nunca moverse en STANDBY
-        self.motor.brake()
+        # Motor desactivado — nunca moverse en STANDBY
+        self.motor.disable()
 
         # Mando conectado — LED parpadeo lento, espera que el usuario elija modo
         self._set_led(PIN_LED_STATUS, int(time.monotonic()) % 2 == 0)
@@ -232,7 +236,7 @@ class CarritoTMR:
             # R2 → adelante progresivo (cuadrático para suavidad)
             self.motor.set_throttle((gp.throttle ** 1.5) * 100)
         else:
-            self.motor.brake()
+            self.motor.disable()
 
     # ----------------------------------------------------------
     # VISION TEST
@@ -310,14 +314,23 @@ class CarritoTMR:
         if lane.crosswalk_detected:
             put("CRUCERO DETECTADO", 140, (0, 180, 255))
 
-        cv2.imshow("TMR2026 - Vision", vis)
-        cv2.waitKey(1)
+        if _HAS_DISPLAY:
+            cv2.imshow("TMR2026 - Vision", vis)
+            cv2.waitKey(1)
+        else:
+            # Sin pantalla: resumen en terminal
+            semaforo = obj.traffic_light.color.upper() if obj.traffic_light else "---"
+            stop_txt = f"STOP {obj.stop_sign_distance_mm:.0f}mm" if obj.stop_sign_detected else "no"
+            conf_txt = f"{lane.confidence:.0%}"
+            print(f"\r[VIS] Carril:{lane.error_px:+.0f}px conf:{conf_txt} | "
+                  f"ToF:{tof_mm or '---'}mm | STOP:{stop_txt} | Luz:{semaforo}   ",
+                  end="", flush=True)
 
     # ----------------------------------------------------------
     # Helpers
     # ----------------------------------------------------------
     def _safe_stop(self):
-        self.motor.brake()
+        self.motor.disable()   # 0%/0% — sin pulso de corriente al IBT-2
         self.steering.center()
         if self._mode == VehicleMode.AUTONOMOUS:
             self.autonomous.deactivate()
@@ -336,7 +349,8 @@ class CarritoTMR:
 
     def _shutdown(self):
         print("\n[SYS] Apagando...")
-        cv2.destroyAllWindows()
+        if _HAS_DISPLAY:
+            cv2.destroyAllWindows()
         self._safe_stop()
         self.gamepad.stop()
         self.sensor.stop()
