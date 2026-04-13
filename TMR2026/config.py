@@ -102,15 +102,20 @@ VEL_STOP_KD = 0.008
 # ============================================================
 # MODO AUTÓNOMO — VELOCIDADES Y UMBRALES
 # ============================================================
-SPEED_STRAIGHT   = 65   # % PWM en rectas
-SPEED_CURVE      = 38   # % PWM en curvas
-SPEED_APPROACH   = 28   # % PWM al aproximarse a señal
+# Velocidades en mínimo para calibración inicial — ajustar en pista
+SPEED_STRAIGHT   = 30   # % PWM en rectas
+SPEED_CURVE      = 20   # % PWM en curvas
+SPEED_APPROACH   = 12   # % PWM al aproximarse a señal
 
 # Umbral de curvatura para reducir velocidad (radianes del error de perspectiva)
 CURVE_THRESHOLD_RAD = 0.30
 
 # Umbral de error de carril para detectar "carril perdido"
 LANE_LOST_THRESHOLD_PX = 280
+
+# Confianza mínima del detector de carril para que el autónomo avance
+# Por debajo de este valor = coche fuera de la pista → freno
+LANE_MIN_CONFIDENCE = 0.30
 
 # ============================================================
 # COMPORTAMIENTO SEÑAL STOP
@@ -133,15 +138,36 @@ EMERGENCY_STOP_MM = 120  # mm — parada de emergencia por obstáculo frontal
 # ============================================================
 # ESTACIONAMIENTO EN BATERÍA
 # ============================================================
-PARK_SEARCH_SPEED  = 22   # % PWM durante búsqueda
-PARK_MANEUVER_SPEED = 18  # % PWM durante maniobra
-PARK_MIN_GAP_MM    = 520  # mm — mínimo hueco para considerar la plaza válida
-PARK_TARGET_GAP_MM = 600  # mm — ancho nominal del espacio
+PARK_SEARCH_SPEED   = 15   # % PWM durante búsqueda
+PARK_MANEUVER_SPEED = 10   # % PWM durante maniobra
+PARK_MIN_GAP_MM     = 520  # mm — mínimo hueco (ToF, si disponible)
+PARK_TARGET_GAP_MM  = 600  # mm — ancho nominal del espacio
 
 # Tiempos calibrados de la maniobra (ajustar en pista)
-PARK_OVERSHOOT_SEC    = 1.2  # avanzar tras detectar el inicio del hueco
-PARK_REVERSE_LOCK_SEC = 2.5  # reversa con giro completo
+PARK_OVERSHOOT_SEC        = 1.2  # avanzar tras detectar el inicio del hueco
+PARK_REVERSE_LOCK_SEC     = 2.5  # reversa con giro completo
 PARK_REVERSE_STRAIGHT_SEC = 1.0  # reversa derecho para centrar
+
+# Detección de hueco por cámara:
+# El hueco se confirma cuando no hay AUTO en la zona lateral del frame
+# durante al menos este tiempo (evita falsos positivos)
+PARK_GAP_CAMERA_MIN_SEC   = 0.4  # segundos sin AUTO en zona lateral
+# Fracción del ancho del frame que define "zona lateral derecha"
+PARK_GAP_CAMERA_ZONE      = 0.55 # bbox con cx > W*0.55 = lado derecho
+
+# ============================================================
+# MANIOBRA DE REBASE (obstáculos estáticos y en movimiento)
+# ============================================================
+# Un AUTO se considera obstáculo en nuestro carril si:
+OVERTAKE_MIN_BBOX_AREA    = 2500  # px² — evita rebasar objetos lejanos
+OVERTAKE_LANE_RATIO       = 0.35  # cx dentro de ±35% del centro del frame
+OVERTAKE_TRIGGER_Y_MIN    = 300   # y2 del bbox ≥ este valor (coche cerca)
+
+# Tiempos de la maniobra (calibrar en pista)
+OVERTAKE_LEFT_SEC    = 1.8  # tiempo girando al carril contrario
+OVERTAKE_PASS_SEC    = 2.2  # tiempo pasando el obstáculo (recto)
+OVERTAKE_RETURN_SEC  = 1.8  # tiempo regresando al carril propio
+OVERTAKE_STEER_DEG   = 20.0 # grados desde centro para el giro de rebase
 
 # ============================================================
 # GAMEPAD  (mapeo Xbox / PS4 genérico vía pygame)
@@ -161,7 +187,7 @@ BTN_VISION_TEST    = BTN_VISION
 
 AXIS_STEER    = 0   # Joystick IZQUIERDO X  (−1=izq, +1=der)
 AXIS_THROTTLE = 5   # Gatillo R2            (−1=suelto, +1=fondo)
-AXIS_BRAKE    = 4   # Gatillo L2
+AXIS_BRAKE    = 2   # Gatillo L2  (verificado con test_gamepad.py)
 
 JOYSTICK_DEADBAND = 0.08
 TRIGGER_DEADBAND  = 0.05

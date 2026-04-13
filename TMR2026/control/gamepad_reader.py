@@ -141,6 +141,12 @@ class GamepadReader:
                 if pygame.joystick.get_count() > 0:
                     joy = pygame.joystick.Joystick(0)
                     joy.init()
+                    # Esperar a que los ejes reporten su posición real.
+                    # Sin esto, R2/L2 devuelven 0.0 en lugar de -1.0
+                    # y se interpreta como 50% de acelerador en el primer frame.
+                    for _ in range(5):
+                        pygame.event.pump()
+                        time.sleep(0.02)
                 else:
                     with self._lock:
                         self._state = GamepadState(connected=False)

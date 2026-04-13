@@ -31,10 +31,12 @@ from config import (
     EMERGENCY_STOP_MM,
     STEER_KP, STEER_KI, STEER_KD,
     VEL_STOP_KP, VEL_STOP_KI, VEL_STOP_KD,
-    SERVO_CENTER_ANGLE,
+    SERVO_CENTER_ANGLE, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE,
     PIN_LED_STOP, PIN_LED_STATUS,
     CROSSWALK_STOP_SEC,
     STOP_SIGN_REAL_HEIGHT_M, CAMERA_FOCAL_LENGTH_PX,
+    LANE_MIN_CONFIDENCE,
+    OVERTAKE_LEFT_SEC, OVERTAKE_PASS_SEC, OVERTAKE_RETURN_SEC, OVERTAKE_STEER_DEG,
 )
 from control.pid_controller import PIDController
 from vision.lane_detector import LaneData
@@ -43,14 +45,18 @@ from autonomy.parking_maneuver import ParkingManeuver, ParkingState
 
 
 class AutoState(Enum):
-    LANE_FOLLOWING   = auto()
-    APPROACHING_STOP = auto()
-    STOPPED_WAIT     = auto()
-    RESUMING         = auto()
-    CROSSWALK_STOP   = auto()
-    CROSSWALK_RESUME = auto()
-    PARKING          = auto()
-    OBSTACLE_HOLD    = auto()
+    LANE_FOLLOWING    = auto()
+    APPROACHING_STOP  = auto()
+    STOPPED_WAIT      = auto()
+    RESUMING          = auto()
+    CROSSWALK_STOP    = auto()
+    CROSSWALK_RESUME  = auto()
+    PARKING           = auto()
+    OBSTACLE_HOLD     = auto()
+    # ── Maniobra de rebase ──────────────────────────────────
+    OVERTAKING_LEFT   = auto()   # girando al carril contrario
+    OVERTAKING_PASS   = auto()   # pasando el obstáculo
+    OVERTAKING_RETURN = auto()   # regresando al carril propio
 
 
 class AutonomousController:
@@ -78,6 +84,7 @@ class AutonomousController:
         self._stop_wait_start: float  = 0.0
         self._resume_start: float     = 0.0
         self._crosswalk_start: float  = 0.0
+        self._overtake_start: float   = 0.0
         self._led_last_toggle: float  = 0.0
         self._led_on: bool            = False
 
@@ -149,7 +156,7 @@ class AutonomousController:
                 self._do_crosswalk_resume(lane, dt)
 
             case AutoState.PARKING:
-                ps = self._parking.update(tof_mm, self.motor, self.steering)
+                ps = self._parking.update(tof_mm, self.motor, self.steering, obj_result)
                 if ps in (ParkingState.PARKED, ParkingState.ABORTED):
                     self._transition(AutoState.LANE_FOLLOWING)
 
@@ -158,10 +165,32 @@ class AutonomousController:
                 if tof_mm is None or tof_mm >= EMERGENCY_STOP_MM + 50:
                     self._transition(AutoState.LANE_FOLLOWING)
 
+            case AutoState.OVERTAKING_LEFT:
+                self._do_overtaking_left(dt)
+
+            case AutoState.OVERTAKING_PASS:
+                self._do_overtaking_pass(lane, dt)
+
+            case AutoState.OVERTAKING_RETURN:
+                self._do_overtaking_return(lane, dt)
+
     # ----------------------------------------------------------
     # Sub-estados
     # ----------------------------------------------------------
     def _do_lane_following(self, lane, obj_result, stop_dist_mm, dt):
+        # Freno si no hay pista visible — el carro no puede avanzar sin carril
+        if lane.confidence < LANE_MIN_CONFIDENCE:
+            self.motor.brake()
+            self.steering.center()
+            print("\r[AUTO] Sin pista — esperando carril...          ", end="", flush=True)
+            return
+
+        # ── Obstáculo en carril → rebase ───────────────────────
+        if obj_result.car_in_lane:
+            print("\n[AUTO] Obstáculo en carril → iniciando rebase")
+            self._transition(AutoState.OVERTAKING_LEFT)
+            return
+
         # Crucero peatonal tiene prioridad sobre STOP
         if lane.crosswalk_detected:
             self._transition(AutoState.CROSSWALK_STOP)
@@ -248,6 +277,48 @@ class AutonomousController:
             self._transition(AutoState.LANE_FOLLOWING)
 
     # ----------------------------------------------------------
+    # Maniobra de rebase
+    # ----------------------------------------------------------
+    def _do_overtaking_left(self, dt):
+        """
+        Fase 1: giro hacia el carril contrario (izquierda).
+        Dura OVERTAKE_LEFT_SEC segundos con ángulo fijo.
+        """
+        elapsed = time.monotonic() - self._overtake_start
+        steer_angle = SERVO_CENTER_ANGLE - OVERTAKE_STEER_DEG  # izquierda
+        self.steering.set_angle(steer_angle)
+        self.motor.set_throttle(SPEED_CURVE)
+        print(f"\r[REBASE] Izquierda {elapsed:.1f}/{OVERTAKE_LEFT_SEC:.1f}s   ", end="", flush=True)
+        if elapsed >= OVERTAKE_LEFT_SEC:
+            self._transition(AutoState.OVERTAKING_PASS)
+
+    def _do_overtaking_pass(self, lane, dt):
+        """
+        Fase 2: avanza recto pasando el obstáculo.
+        Usa el error de carril para mantenerse en el carril contrario.
+        """
+        elapsed = time.monotonic() - self._overtake_start
+        self._apply_steering(lane, dt)
+        self.motor.set_throttle(SPEED_CURVE)
+        print(f"\r[REBASE] Pasando  {elapsed:.1f}/{OVERTAKE_PASS_SEC:.1f}s   ", end="", flush=True)
+        if elapsed >= OVERTAKE_PASS_SEC:
+            self._transition(AutoState.OVERTAKING_RETURN)
+
+    def _do_overtaking_return(self, lane, dt):
+        """
+        Fase 3: regresa al carril propio (derecha).
+        Dura OVERTAKE_RETURN_SEC segundos, luego vuelve a LANE_FOLLOWING.
+        """
+        elapsed = time.monotonic() - self._overtake_start
+        steer_angle = SERVO_CENTER_ANGLE + OVERTAKE_STEER_DEG  # derecha
+        self.steering.set_angle(steer_angle)
+        self.motor.set_throttle(SPEED_CURVE)
+        print(f"\r[REBASE] Regreso  {elapsed:.1f}/{OVERTAKE_RETURN_SEC:.1f}s  ", end="", flush=True)
+        if elapsed >= OVERTAKE_RETURN_SEC:
+            print()
+            self._transition(AutoState.LANE_FOLLOWING)
+
+    # ----------------------------------------------------------
     # Helpers
     # ----------------------------------------------------------
     def _resolve_stop_distance(
@@ -304,6 +375,11 @@ class AutonomousController:
 
         elif new_state == AutoState.LANE_FOLLOWING:
             self._steer_pid.reset()
+
+        elif new_state in (AutoState.OVERTAKING_LEFT,
+                           AutoState.OVERTAKING_PASS,
+                           AutoState.OVERTAKING_RETURN):
+            self._overtake_start = now
 
     @staticmethod
     def _set_led(pin: int, state: bool):

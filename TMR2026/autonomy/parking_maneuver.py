@@ -46,6 +46,7 @@ from config import (
     PARK_MIN_GAP_MM, PARK_TARGET_GAP_MM,
     PARK_OVERSHOOT_SEC, PARK_REVERSE_LOCK_SEC,
     PARK_REVERSE_STRAIGHT_SEC,
+    PARK_GAP_CAMERA_MIN_SEC,
     EMERGENCY_STOP_MM,
 )
 
@@ -77,8 +78,9 @@ class ParkingManeuver:
     def __init__(self, gap_side: str = "right"):
         self.gap_side = gap_side  # lado donde está el espacio de estacionamiento
         self._state     = ParkingState.IDLE
-        self._phase_start: float = 0.0
+        self._phase_start: float    = 0.0
         self._gap_detected_at: float = 0.0
+        self._gap_open_since: float  = 0.0   # cuando dejó de haber AUTO en zona lateral
 
         # Para decidir el ángulo de giro máximo
         if gap_side == "right":
@@ -127,6 +129,7 @@ class ParkingManeuver:
         tof_distance_mm: float | None,
         motor,
         steering,
+        obj_result=None,
     ) -> ParkingState:
         """
         Actualiza la FSM.  Debe llamarse en cada ciclo del bucle principal.
@@ -159,17 +162,17 @@ class ParkingManeuver:
         match self._state:
 
             case ParkingState.SEARCHING:
-                # Avanza despacio, buscando el hueco con el ToF
+                # Avanza despacio buscando el hueco.
+                # Prioridad: cámara (obj_result) > ToF (si disponible).
                 motor.set_throttle(PARK_SEARCH_SPEED)
                 steering.center()
 
-                gap_open = (tof_distance_mm is None or
-                            tof_distance_mm >= PARK_MIN_GAP_MM)
+                gap_open = self._detect_gap(tof_distance_mm, obj_result, now)
 
-                if gap_open and elapsed > 0.3:   # debounce mínimo
+                if gap_open:
                     self._gap_detected_at = now
                     self._transition(ParkingState.POSITIONING)
-                    print(f"[PARKING] Hueco detectado ({tof_distance_mm} mm). Posicionando...")
+                    print(f"[PARKING] Hueco detectado. Posicionando...")
 
             case ParkingState.POSITIONING:
                 # Avanza un poco más para alinear el eje trasero
@@ -235,6 +238,47 @@ class ParkingManeuver:
         # Usar el valor de config como límite superior de seguridad
         return min(estimated, PARK_REVERSE_LOCK_SEC)
 
+    # ----------------------------------------------------------
+    # Detección de hueco
+    # ----------------------------------------------------------
+    def _detect_gap(self, tof_mm, obj_result, now: float) -> bool:
+        """
+        Combina cámara y ToF para decidir si hay un hueco de estacionamiento.
+
+        Lógica:
+        - Si hay obj_result → usar cámara como fuente principal.
+          El hueco existe cuando NO hay AUTO en la zona lateral derecha
+          durante al menos PARK_GAP_CAMERA_MIN_SEC segundos.
+        - Si no hay obj_result → caer a ToF (comportamiento original).
+        """
+        if obj_result is not None:
+            return self._detect_gap_camera(obj_result, now)
+
+        # Fallback a ToF
+        gap_open = (tof_mm is None or tof_mm >= PARK_MIN_GAP_MM)
+        return gap_open and (now - self._phase_start) > 0.3
+
+    def _detect_gap_camera(self, obj_result, now: float) -> bool:
+        """
+        Detecta el hueco cuando el espacio lateral derecho está despejado.
+
+        Mientras el primer auto delimitador estaba en el lado derecho y
+        ahora ya no hay AUTO en esa zona = inicio del hueco.
+        Requiere PARK_GAP_CAMERA_MIN_SEC segundos consecutivos sin AUTO lateral
+        para confirmar (evita falsos positivos por frames ruidosos).
+        """
+        lateral_clear = not obj_result.car_in_park_zone
+
+        if lateral_clear:
+            if self._gap_open_since == 0.0:
+                self._gap_open_since = now   # empieza a contar
+            gap_secs = now - self._gap_open_since
+            return gap_secs >= PARK_GAP_CAMERA_MIN_SEC
+        else:
+            self._gap_open_since = 0.0   # resetear si vuelve a aparecer un auto
+            return False
+
     def _transition(self, new_state: ParkingState):
         self._state = new_state
         self._phase_start = time.monotonic()
+        self._gap_open_since = 0.0   # reset al cambiar de fase

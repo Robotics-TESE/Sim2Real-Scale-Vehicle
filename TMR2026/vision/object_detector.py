@@ -21,6 +21,8 @@ from config import (
     CAMERA_WIDTH, CAMERA_HEIGHT,
     STOP_SIGN_REAL_HEIGHT_M, CAMERA_FOCAL_LENGTH_PX,
     DETECTION_CONFIDENCE,
+    OVERTAKE_LANE_RATIO, OVERTAKE_MIN_BBOX_AREA, OVERTAKE_TRIGGER_Y_MIN,
+    PARK_GAP_CAMERA_ZONE,
 )
 
 
@@ -52,6 +54,9 @@ class ObjectDetector:
 
         person_detected: bool = False
         car_detected: bool = False
+        car_bbox: Optional[tuple] = None          # bbox del auto más grande/cercano
+        car_in_lane: bool = False                 # True si el auto bloquea nuestro carril
+        car_in_park_zone: bool = False            # True si hay auto en zona lateral (parking)
         closest_object_mm: Optional[float] = None
 
     # ----------------------------------------------------------
@@ -103,10 +108,37 @@ class ObjectDetector:
 
             elif det.label == "AUTO":
                 result.car_detected = True
+                bbox = (det.x1, det.y1, det.x2, det.y2)
+                area = det.width * det.height
+                # Guardar el auto más grande (más cercano)
+                if result.car_bbox is None:
+                    result.car_bbox = bbox
+                else:
+                    prev = result.car_bbox
+                    prev_area = (prev[2]-prev[0]) * (prev[3]-prev[1])
+                    if area > prev_area:
+                        result.car_bbox = bbox
 
         # Distancia al objeto más cercano (para emergencia)
         if tof_distance_mm is not None:
             result.closest_object_mm = tof_distance_mm
+
+        # ── Clasificar posición del auto ──────────────────────────
+        if result.car_bbox is not None:
+            x1, y1, x2, y2 = result.car_bbox
+            cx   = (x1 + x2) / 2
+            area = (x2 - x1) * (y2 - y1)
+            frame_cx = CAMERA_WIDTH / 2
+
+            # Obstáculo en carril: cerca del centro y suficientemente grande
+            result.car_in_lane = (
+                abs(cx - frame_cx) < CAMERA_WIDTH * OVERTAKE_LANE_RATIO
+                and area >= OVERTAKE_MIN_BBOX_AREA
+                and y2 >= OVERTAKE_TRIGGER_Y_MIN
+            )
+
+            # Auto en zona lateral derecha (detección de espacio para parking)
+            result.car_in_park_zone = cx > CAMERA_WIDTH * PARK_GAP_CAMERA_ZONE
 
         return result
 

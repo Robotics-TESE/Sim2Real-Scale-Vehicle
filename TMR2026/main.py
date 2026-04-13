@@ -17,6 +17,7 @@ import sys
 import time
 import signal
 
+import cv2
 import RPi.GPIO as GPIO
 
 from config import (
@@ -110,7 +111,7 @@ class CarritoTMR:
                 case VehicleMode.MANUAL:
                     self._manual(gp)
                 case VehicleMode.VISION:
-                    self._vision(lane, obj, tof)
+                    self._vision(lane, obj, tof, frame_data)
                 case VehicleMode.AUTONOMOUS | VehicleMode.PARKING:
                     self.autonomous.update(lane, obj, tof, self._dt)
 
@@ -176,6 +177,8 @@ class CarritoTMR:
     def _set_mode(self, new_mode: str):
         if new_mode != self._mode:
             print(f"\n[FSM] {self._mode} → {new_mode}")
+            if self._mode == VehicleMode.VISION:
+                cv2.destroyAllWindows()
         self._mode = new_mode
         self._last_mode_change = time.monotonic()
 
@@ -183,12 +186,29 @@ class CarritoTMR:
     # STANDBY
     # ----------------------------------------------------------
     def _standby(self, gp):
-        if gp.connected:
-            print("[FSM] Mando conectado → MANUAL")
+        if not gp.connected:
+            self._set_led(PIN_LED_STATUS, int(time.monotonic() * 2) % 2 == 0)
+            return
+
+        # Motor frenado — nunca moverse en STANDBY
+        self.motor.brake()
+
+        # Mando conectado — LED parpadeo lento, espera que el usuario elija modo
+        self._set_led(PIN_LED_STATUS, int(time.monotonic()) % 2 == 0)
+        print("\r[STANDBY] Cruz=Manual  Círculo=Cámara  Cuadrado=Autónomo   ", end="", flush=True)
+
+        if self.gamepad.consume_button(BTN_MANUAL):
+            print()
             self._set_mode(VehicleMode.MANUAL)
             self._set_led(PIN_LED_STATUS, True)
-        else:
-            self._set_led(PIN_LED_STATUS, int(time.monotonic() * 2) % 2 == 0)
+        elif self.gamepad.consume_button(BTN_VISION):
+            print()
+            self._set_mode(VehicleMode.VISION)
+        elif self.gamepad.consume_button(BTN_AUTONOMOUS):
+            print()
+            self._safe_stop()
+            self._set_mode(VehicleMode.AUTONOMOUS)
+            self.autonomous.activate()
 
     # ----------------------------------------------------------
     # MANUAL
@@ -217,28 +237,81 @@ class CarritoTMR:
     # ----------------------------------------------------------
     # VISION TEST
     # ----------------------------------------------------------
-    def _vision(self, lane, obj, tof_mm):
-        """Motores OFF. Imprime en terminal lo que detecta la cámara."""
+    def _vision(self, lane, obj, tof_mm, frame_data):
+        """
+        Motores OFF. Muestra la cámara con anotaciones en tiempo real:
+          - Bounding boxes de objetos detectados (STOP, semáforo, persona, auto)
+          - Línea de centro del carril detectado
+          - Estado del semáforo, distancia ToF y confianza del carril
+        Presiona Círculo de nuevo para volver a Manual.
+        """
         self.motor.brake()
         self.steering.center()
 
-        stop_info = "no"
+        if frame_data is None:
+            print("\r[VIS] Esperando frame de cámara...", end="", flush=True)
+            return
+
+        vis = frame_data.image.copy()
+        H, W = vis.shape[:2]
+
+        # ── Bounding boxes de detecciones ────────────────────────
+        COLOR_MAP = {
+            "STOP":    (0,   0,   255),
+            "SEMAFORO":(0,   200, 255),
+            "PERSONA": (255, 100, 0  ),
+            "AUTO":    (200, 0,   200),
+        }
+        for det in frame_data.detections:
+            color = COLOR_MAP.get(det.label, (180, 180, 180))
+            # Ajustar color del semáforo según su estado
+            if det.label == "SEMAFORO" and obj.traffic_light:
+                lc = obj.traffic_light.color
+                if lc == "red":    color = (0,   0,   255)
+                elif lc == "green":color = (0,   255, 0  )
+                elif lc == "yellow":color = (0,  220, 220)
+            cv2.rectangle(vis, (det.x1, det.y1), (det.x2, det.y2), color, 2)
+            label_txt = f"{det.label} {det.confidence:.0%}"
+            cv2.putText(vis, label_txt, (det.x1, max(det.y1 - 6, 12)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+        # ── Centro del carril ─────────────────────────────────────
+        lane_cx = W // 2 + int(lane.error_px)
+        lane_cx = max(0, min(W - 1, lane_cx))
+        # Línea de referencia central (amarillo tenue)
+        cv2.line(vis, (W // 2, H), (W // 2, H // 2), (0, 200, 200), 1)
+        # Línea de centro del carril detectado (verde si OK, rojo si perdido)
+        lane_color = (0, 255, 0) if lane.confidence >= 0.30 else (0, 0, 255)
+        cv2.line(vis, (lane_cx, H), (lane_cx, H // 2), lane_color, 2)
+
+        # ── Overlay de texto ──────────────────────────────────────
+        def put(text, y, color=(255, 255, 255)):
+            cv2.putText(vis, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55, color, 2, cv2.LINE_AA)
+
+        conf_col = (0, 255, 0) if lane.confidence >= 0.30 else (0, 80, 255)
+        put(f"Carril: {lane.error_px:+.0f}px  conf:{lane.confidence:.0%}"
+            + ("  CURVA" if lane.is_curve else ""),
+            28, conf_col)
+
+        tof_txt = f"{tof_mm:.0f} mm" if tof_mm else "--- mm"
+        put(f"ToF: {tof_txt}", 56, (255, 220, 0))
+
         if obj.stop_sign_detected:
             d = obj.stop_sign_distance_mm
-            stop_info = f"SI {d:.0f}mm" if d else "SI ?mm"
+            d_txt = f"{d:.0f} mm" if d else "? mm"
+            put(f"STOP: {d_txt}", 84, (0, 80, 255))
 
-        semaforo = obj.traffic_light.color.upper() if obj.traffic_light else "---"
+        if obj.traffic_light:
+            lc = obj.traffic_light.color.upper()
+            lc_col = {"RED":(0,0,255),"GREEN":(0,255,0),"YELLOW":(0,220,220)}.get(lc,(200,200,200))
+            put(f"Semaforo: {lc}", 112, lc_col)
 
-        print(
-            f"\r[VIS] "
-            f"Carril:{lane.error_px:+6.1f}px | "
-            f"Curva:{'SI' if lane.is_curve else 'no'} | "
-            f"Crucero:{'SI' if lane.crosswalk_detected else 'no'} | "
-            f"ToF:{str(tof_mm or '---'):>5}mm | "
-            f"STOP:{stop_info:<10} | "
-            f"Luz:{semaforo}",
-            end="", flush=True,
-        )
+        if lane.crosswalk_detected:
+            put("CRUCERO DETECTADO", 140, (0, 180, 255))
+
+        cv2.imshow("TMR2026 - Vision", vis)
+        cv2.waitKey(1)
 
     # ----------------------------------------------------------
     # Helpers
@@ -263,6 +336,7 @@ class CarritoTMR:
 
     def _shutdown(self):
         print("\n[SYS] Apagando...")
+        cv2.destroyAllWindows()
         self._safe_stop()
         self.gamepad.stop()
         self.sensor.stop()
