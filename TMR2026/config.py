@@ -58,7 +58,8 @@ CAMERA_HEIGHT = 480
 CAMERA_FPS    = 30
 
 # Umbral de confianza para aceptar detecciones del NPU
-DETECTION_CONFIDENCE = 0.50
+# 0.30 detecta mejor señales impresas (menos textura que señales reales)
+DETECTION_CONFIDENCE = 0.30
 
 # Nombres de clases COCO que interesan al TMR
 # (deben coincidir con el modelo cargado en el IMX500)

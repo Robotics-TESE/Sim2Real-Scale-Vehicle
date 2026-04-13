@@ -17,12 +17,21 @@ import os
 import sys
 import time
 import signal
+import argparse
 
 import cv2
 import RPi.GPIO as GPIO
 
-# Si no hay display (SSH sin -X, sin monitor HDMI) no usamos imshow
-_HAS_DISPLAY = bool(os.environ.get("DISPLAY"))
+# --display : abre ventana de cámara en el HDMI de la Pi
+#   Uso: python3 main.py --display
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--display", action="store_true",
+                 help="Mostrar ventana de cámara en el monitor de la Pi")
+_args, _ = _ap.parse_known_args()
+
+_HAS_DISPLAY = _args.display
+if _HAS_DISPLAY:
+    os.environ.setdefault("DISPLAY", ":0")
 
 from config import (
     PIN_LED_STOP, PIN_LED_STATUS,
@@ -220,23 +229,32 @@ class CarritoTMR:
     def _manual(self, gp):
         """
         Palanca izquierda X → dirección servo.
-        R2 → motor adelante progresivo.
+        R2 → motor adelante progresivo con rampa suave.
         L2 → reversa suave.
         """
-        # Dirección — palanca izquierda X (eje 0)
-        rango = SERVO_CENTER_ANGLE - 45   # 45°
+        # ── Dirección — palanca izquierda X (eje 0) ──────────────
+        rango = SERVO_CENTER_ANGLE - 45   # ±45° desde centro
         servo_angle = SERVO_CENTER_ANGLE + gp.steer * rango
         self.steering.set_angle(servo_angle)
 
-        # Motor
+        # Debug: muestra steer y ángulo en terminal para verificar servo
+        print(f"\r[MAN] steer:{gp.steer:+.2f} servo:{servo_angle:.0f}°  "
+              f"R2:{gp.throttle:.2f} L2:{gp.brake:.2f}   ", end="", flush=True)
+
+        # ── Motor ─────────────────────────────────────────────────
         if gp.brake > 0.05:
-            # L2 → reversa con mínimo garantizado para vencer inercia
+            # L2 → reversa (funciona bien, sin cambios)
             duty = max((gp.brake ** 2) * 50, 25.0)
             self.motor.set_throttle(-duty)
+
         elif gp.throttle > 0.05:
-            # R2 → adelante: mínimo 25% para que el motor realmente arranque
-            duty = max((gp.throttle ** 1.5) * 100, 25.0)
-            self.motor.set_throttle(duty)
+            # R2 → rampa suave: máximo 4% por tick (50 Hz = 80 ms para llegar a 15%)
+            # Evita el pico de corriente que apagaba el sistema
+            target = max((gp.throttle ** 1.5) * 100, 15.0)
+            current = abs(self.motor.duty)
+            ramped  = min(current + 4.0, target)
+            self.motor.set_throttle(ramped)
+
         else:
             self.motor.disable()
 
