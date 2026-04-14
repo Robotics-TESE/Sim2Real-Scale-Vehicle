@@ -47,7 +47,18 @@ log = logging.getLogger("tmr.vision")
 # ─────────────────────────────────────────────────────────────────────────────
 # Constantes internas
 # ─────────────────────────────────────────────────────────────────────────────
-_YOLO11N_MODEL   = "/usr/share/imx500-models/imx500_network_yolo11n_pp.rpk"
+# Modelos en orden de preferencia (el primero que exista se usa)
+_MODEL_CANDIDATES = [
+    "/usr/share/imx500-models/imx500_network_yolo11n_pp.rpk",
+    "/usr/share/imx500-models/imx500_network_yolov8n_pp.rpk",
+    "/usr/share/imx500-models/imx500_network_efficientdet_lite0_pp.rpk",
+]
+
+import os as _os
+_YOLO11N_MODEL = next(
+    (m for m in _MODEL_CANDIDATES if _os.path.exists(m)),
+    _MODEL_CANDIDATES[-1],   # fallback aunque no exista — error claro al iniciar
+)
 _STREAM_W        = 2028
 _STREAM_H        = 1520
 _FPS             = 30
