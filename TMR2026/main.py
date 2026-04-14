@@ -38,14 +38,15 @@ from config import (
     SERVO_CENTER_ANGLE,
     BTN_MANUAL, BTN_VISION, BTN_AUTONOMOUS, BTN_PARKING,
     CAMERA_WIDTH, CAMERA_HEIGHT,
+    SPEED_STRAIGHT, SPEED_CURVE,
 )
 from hardware.motor_driver    import MotorDriver
 from hardware.steering_driver import SteeringDriver
 from hardware.distance_sensor import DistanceSensor
 from control.gamepad_reader   import GamepadReader
-from vision.lane_detector     import LaneDetector, LaneData
+from vision.lane_detector     import LaneData
 from vision.object_detector   import ObjectDetector, TrafficLightState
-from vision_module            import VisionModule, VisionState
+from vision_module            import VisionModule, VisionState, _MAIN_W, _MAIN_H, _LORES_W, _LORES_H
 from autonomy.autonomous_mode import AutonomousController
 
 
@@ -73,6 +74,24 @@ def _vs_to_obj(vs: VisionState) -> ObjectDetector.AnalysisResult:
     return r
 
 
+def _vs_to_lane(vs: VisionState) -> LaneData:
+    """
+    Convierte el estado de carril del VisionModule al formato LaneData
+    que espera AutonomousController. El error y la confianza vienen del
+    detector de histograma interno (plano Y del stream lores 640×480).
+    """
+    is_curve = abs(vs.lane_error) > 40
+    speed    = SPEED_CURVE if is_curve else SPEED_STRAIGHT
+    return LaneData(
+        error_px          = vs.lane_error,
+        curvature_rad     = 0.0,
+        is_curve          = is_curve,
+        confidence        = vs.lane_confidence,
+        suggested_speed   = speed,
+        crosswalk_detected = False,
+    )
+
+
 class VehicleMode:
     STANDBY    = "STANDBY"
     MANUAL     = "MANUAL"
@@ -96,7 +115,6 @@ class CarritoTMR:
         self.vision   = VisionModule(display_overlay=_HAS_DISPLAY)
         self.gamepad  = GamepadReader()
 
-        self.lane_detector = LaneDetector(debug=False)
         self.autonomous    = AutonomousController(self.motor, self.steering)
 
         self._mode           = VehicleMode.STANDBY
@@ -132,11 +150,9 @@ class CarritoTMR:
             vs        = self.vision.get_state()
             raw_frame = self.vision.get_latest_frame()
 
-            lane = LaneData(0, 0, False, 0, SERVO_CENTER_ANGLE)
-            obj  = ObjectDetector.AnalysisResult()
-            if raw_frame is not None:
-                lane = self.lane_detector.process(raw_frame)
-                obj  = _vs_to_obj(vs)
+            # Carril y objetos ya vienen procesados por VisionModule
+            lane = _vs_to_lane(vs)
+            obj  = _vs_to_obj(vs)
 
             self._handle_mode_transitions(gp)
 
@@ -298,11 +314,14 @@ class CarritoTMR:
             print("\r[VIS] Esperando frame de cámara...", end="", flush=True)
             return
 
-        # Stream ya es 640×480 — no necesita resize
-        vis = raw_frame.copy()
-        H, W = vis.shape[:2]
+        # Escalar 1280×720 → 640×360 para visualización (bboxes escalados también)
+        VIS_W, VIS_H = 640, 360
+        vis = cv2.resize(raw_frame, (VIS_W, VIS_H))
+        H, W = VIS_H, VIS_W
+        sx = VIS_W / _MAIN_W
+        sy = VIS_H / _MAIN_H
 
-        # ── Bounding boxes del NPU ────────────────────────────────
+        # ── Bounding boxes del NPU (coords en 1280×720, escalar a VIS) ───
         COLOR_MAP = {
             "STOP":     (0,   0,   255),
             "SEMAFORO": (0,   200, 255),
@@ -316,12 +335,14 @@ class CarritoTMR:
                 if lc == "red":     color = (0,   0,   255)
                 elif lc == "green": color = (0,   255, 0  )
                 elif lc == "yellow":color = (0,   220, 220)
-            cv2.rectangle(vis, (det.x1, det.y1), (det.x2, det.y2), color, 2)
+            x1 = int(det.x1*sx); y1 = int(det.y1*sy)
+            x2 = int(det.x2*sx); y2 = int(det.y2*sy)
+            cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
             cv2.putText(vis, f"{det.label} {det.confidence:.0%}",
-                        (det.x1, max(det.y1 - 6, 12)),
+                        (x1, max(y1 - 6, 12)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
-        # ── Centro del carril ────────────────────────────────────
+        # ── Centro del carril (error en coords lores 640px, VIS_W=640) ──
         lane_cx = max(0, min(W - 1, W // 2 + int(lane.error_px)))
         cv2.line(vis, (W // 2, H), (W // 2, H // 2), (0, 200, 200), 1)
         lane_col = (0, 255, 0) if lane.confidence >= 0.30 else (0, 0, 255)

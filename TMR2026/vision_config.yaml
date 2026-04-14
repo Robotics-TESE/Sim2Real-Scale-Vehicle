@@ -1,0 +1,79 @@
+# vision_config.yaml — Parámetros tunables del módulo de visión TMR 2026.
+# Editar entre corridas sin recompilar. Recarga automática en recalibrate_lighting().
+
+# ─── Cámara ────────────────────────────────────────────────────────────────────
+camera:
+  # Stream principal — visualización / overlay NPU (no procesado en CPU)
+  main_w: 1280
+  main_h: 720
+  # Stream lores — plano Y para seguimiento de carril (~2 ms en CPU)
+  lores_w: 640
+  lores_h: 480
+  fps: 30
+  awb_warmup_s: 1.5       # segundos de estabilización AE/AWB antes de bloquear
+  buffer_count: 4          # buffers de cámara — más = más fluidez, más latencia
+  # Ruta al modelo IMX500. Se prueban en orden; se usa el primero que exista.
+  model_candidates:
+    - "/usr/share/imx500-models/imx500_network_yolo11n_pp.rpk"
+    - "/usr/share/imx500-models/imx500_network_yolov8n_pp.rpk"
+    - "/usr/share/imx500-models/imx500_network_efficientdet_lite0_pp.rpk"
+
+# ─── Seguimiento de carril ─────────────────────────────────────────────────────
+lane:
+  # ROI inferior del frame lores donde se buscan las líneas blancas.
+  # Las señales de tráfico NO aparecen aquí (están elevadas).
+  roi_y_start: 240         # px desde arriba
+  roi_y_end:   480         # = borde inferior del frame lores
+  # Umbral binario. Pista negra brillante + líneas blancas → alto umbral.
+  # Ajustar si la iluminación cambia mucho: 180 (tenue) – 220 (brillante).
+  threshold: 200
+  morph_kernel_size: 3     # tamaño del kernel para MORPH_OPEN (quita reflejos)
+  min_peak_pixels: 15      # mínimo de píxeles blancos en un pico para aceptarlo
+  lost_frames_limit: 8     # frames consecutivos sin carril → END_OF_TRACK (~267 ms)
+  pid:
+    kp: 0.8                # ajustar en pista: subir hasta que oscile, luego ÷2
+    ki: 0.05
+    kd: 0.15
+    max_integral: 30.0     # anti-windup
+
+# ─── Detección de señales ─────────────────────────────────────────────────────
+signs:
+  confidence_threshold: 0.55   # conservador: solo acepta detecciones seguras
+  min_bbox_area_px2: 600        # ignora señales muy lejanas (< ~0.5 m)
+  sign_real_height_m: 0.10      # altura real de señales TMR ≈ 10 cm
+  focal_length_px: 1550         # calibrar con tablero a distancia conocida
+  hysteresis_frames: 3          # confirmación en N frames consecutivos
+  iou_threshold: 0.50           # IoU mínimo entre frames para considerar misma señal
+  # Distancias de reacción (metros)
+  approach_dist_m: 0.50         # empieza a reducir velocidad
+  brake_dist_m: 0.30            # freno progresivo / fusión con VL53L0X
+  # ROI superior donde se filtran los centros de bbox de señales
+  sign_roi_y_end: 200           # solo bboxes cuyo cy < este valor
+
+# ─── Máquina de estados ────────────────────────────────────────────────────────
+fsm:
+  stop_wait_s: 5.0              # pausa obligatoria en señal STOP (reglamento TMR)
+  speed_approach_factor: 0.60   # fracción de velocidad base en SIGN_APPROACH
+  resume_ramp_s: 1.5            # tiempo de rampa al reanudar tras STOP
+  end_of_track_speed: 0.0       # velocidad al detectar fin de pista
+
+# ─── GPIO (numeración BCM, Pi 5 chip 4) ───────────────────────────────────────
+gpio:
+  led_hazard_left:  5    # LED intermitente izquierdo (hazard)
+  led_hazard_right: 6    # LED intermitente derecho  (hazard)
+  led_turn_left:   19    # LED direccional izquierdo
+  led_turn_right:  20    # LED direccional derecho
+  btn_teleop:      21    # botón físico de override teleop (pull-up → LOW = activo)
+  hazard_blink_hz: 2.0   # frecuencia de parpadeo hazard (TMR ≈ 2 Hz)
+  turn_signal_min_s: 1.5 # mínimo de activación de direccional (reglamento)
+
+# ─── Teleop UDP ────────────────────────────────────────────────────────────────
+teleop:
+  udp_port: 5005          # puerto escucha de comandos UDP de respaldo
+  udp_host: "0.0.0.0"
+
+# ─── Rendimiento y watchdog ────────────────────────────────────────────────────
+performance:
+  fps_warn_threshold: 25    # FPS por debajo de este valor → warning en log
+  fps_reset_threshold: 15   # FPS por debajo → reset forzado de cámara
+  fps_check_window_s: 2.0   # ventana de medición de FPS
