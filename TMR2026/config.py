@@ -55,6 +55,12 @@ SERVO_CENTER_ANGLE  = 90.0  # grados — ruedas al frente
 SERVO_MIN_ANGLE     = 58.0  # grados — giro máximo izquierda (reducido para no trabarse)
 SERVO_MAX_ANGLE     = 122.0 # grados — giro máximo derecha  (reducido para no trabarse)
 
+# El servo está montado al revés: con joystick a la izquierda el coche giraba a
+# la derecha. STEERING_INVERTED corrige esto a nivel de driver — todos los modos
+# (MANUAL, AUTONOMOUS, VISION) ven la misma orientación lógica:
+# 90° = recto, <90° = izquierda, >90° = derecha.
+STEERING_INVERTED   = True
+
 # ============================================================
 # PI AI CAMERA  (Sony IMX500 — aceleración NPU on-chip)
 # ============================================================

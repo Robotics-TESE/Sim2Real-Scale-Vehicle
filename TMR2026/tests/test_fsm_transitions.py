@@ -30,6 +30,8 @@ class FakeSteering:
     def __init__(self): self.angle = 90.0
     def set_angle(self, a): self.angle = a
     def center(self):       self.angle = 90.0
+    @property
+    def current_angle(self): return self.angle
 
 
 class FakePID:

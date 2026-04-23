@@ -36,6 +36,11 @@ from config import (
     MAX_STEERING_ANGLE_DEG,
 )
 
+try:
+    from config import STEERING_INVERTED
+except ImportError:
+    STEERING_INVERTED = False
+
 
 class SteeringDriver:
     """Control de dirección con geometría Ackermann sobre PCA9685."""
@@ -71,9 +76,14 @@ class SteeringDriver:
         angle_deg : float
             Rango [SERVO_MIN_ANGLE, SERVO_MAX_ANGLE].
             90° = recto, <90° = izquierda, >90° = derecha.
+
+        Si `STEERING_INVERTED=True` el ángulo lógico se voltea al escribir al
+        servo, pero `current_angle` retorna el valor lógico esperado por el
+        consumidor (signals/PID/etc.).
         """
         angle_deg = max(SERVO_MIN_ANGLE, min(SERVO_MAX_ANGLE, float(angle_deg)))
-        self._servo.angle = angle_deg
+        physical = (2.0 * SERVO_CENTER_ANGLE - angle_deg) if STEERING_INVERTED else angle_deg
+        self._servo.angle = physical
         self._current_angle = angle_deg
 
     def steer_from_error(self, lane_error_px: float, kp: float = 0.09) -> float:

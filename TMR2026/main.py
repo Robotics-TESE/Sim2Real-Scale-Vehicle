@@ -198,6 +198,9 @@ class VehicleTMR:
                 self._update_vision()
                 self._run_mode(dt)
 
+                # Avanzar parpadeo en CADA iteración — vale para todos los modos
+                self.signals.tick()
+
                 elapsed = time.monotonic() - now
                 sleep   = max(0.0, (1.0 / LOOP_HZ) - elapsed)
                 if sleep > 0:
@@ -326,10 +329,30 @@ class VehicleTMR:
                 self._do_vision()
             case self.Mode.AUTONOMOUS:
                 self.fsm.update(dt)
+                self._log_autonomous()
+
+    def _log_autonomous(self) -> None:
+        """Línea de status del modo autónomo — incluye lo que ve YOLO."""
+        dets = self.sign_det.get_detections()
+        if dets:
+            sign_txt = ", ".join(
+                f"{d.label}@{(d.distance_m or 0)*100:.0f}cm" for d in dets[:2]
+            )
+        else:
+            sign_txt = "—"
+        lidar_txt = f"{self.sensor.front_mm:.0f}" if self.sensor.front_mm else "---"
+        print(f"\r[AUT] {self.fsm.state.name:<10}  "
+              f"err:{self._last_lane.error_px:+5.0f}px  "
+              f"angle:{self.steering.current_angle:5.1f}°  "
+              f"duty:{self.motor.current_duty:+.0f}%  "
+              f"lidar:{lidar_txt}mm  signs:{sign_txt}   ",
+              end="", flush=True)
 
     def _do_standby(self) -> None:
         self.motor.brake()
         self.steering.center()
+        self.signals.set_mode(SignalMode.OFF)
+        self.brake_light.off()
         if self._joystick is None:
             return
         # En STANDBY: cualquier botón activa MANUAL
@@ -349,12 +372,21 @@ class VehicleTMR:
             self.motor.brake()
             return
 
-        # Dirección
+        # Dirección — la inversión física del servo se maneja en SteeringDriver,
+        # aquí trabajamos en el sistema lógico (joystick izq = ángulo < 90).
         steer_raw = self._joystick.get_axis(AXIS_STEER)
         if abs(steer_raw) < DEADBAND:
             steer_raw = 0.0
         angle = SERVO_CENTER + steer_raw * (SERVO_CENTER - SERVO_MIN)
         self.steering.set_angle(angle)
+
+        # Direccionales según dirección del giro
+        if   steer_raw < -0.15:
+            self.signals.set_mode(SignalMode.LEFT)
+        elif steer_raw > +0.15:
+            self.signals.set_mode(SignalMode.RIGHT)
+        else:
+            self.signals.set_mode(SignalMode.OFF)
 
         # Velocidad
         throttle = self._joystick.get_axis(AXIS_THROTTLE)   # −1=suelto, +1=fondo
@@ -373,14 +405,32 @@ class VehicleTMR:
         else:
             self.motor.set_speed(0.0)   # rueda libre (no freno)
 
+        # Luz de freno: encendida sólo cuando hay reversa activa
+        if self.motor.current_duty < -1.0:
+            self.brake_light.on()
+        else:
+            self.brake_light.off()
+
+        # Log con detecciones YOLO (lo que ve el carro)
+        dets = self.sign_det.get_detections()
+        if dets:
+            sign_txt = ", ".join(
+                f"{d.label}@{(d.distance_m or 0)*100:.0f}cm" for d in dets[:2]
+            )
+        else:
+            sign_txt = "—"
+
         print(f"\r[MAN] steer:{steer_raw:+.2f} ({angle:.0f}°)  "
-              f"t:{t:.2f}  b:{b:.2f}  duty:{self.motor.current_duty:.0f}%   ",
+              f"t:{t:.2f}  b:{b:.2f}  duty:{self.motor.current_duty:+.0f}%  "
+              f"signs:{sign_txt}   ",
               end="", flush=True)
 
     def _do_vision(self) -> None:
         """Debug de visión — motores OFF, muestra pipeline en pantalla."""
         self.motor.brake()
         self.steering.center()
+        self.signals.set_mode(SignalMode.OFF)
+        self.brake_light.off()
 
         frame = self.camera.get_frame()
         if frame is None:

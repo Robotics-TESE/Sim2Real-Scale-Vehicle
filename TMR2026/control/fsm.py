@@ -84,6 +84,10 @@ class AutonomousFSM:
     SERVO_MIN       = 45.0
     SERVO_MAX       = 135.0
 
+    # Umbral en grados desde el centro para activar direccional en CRUCERO/REANUDAR.
+    # < SIGNAL_DIR_THRESH_DEG → off (ruedas casi rectas, no vale la pena parpadear).
+    SIGNAL_DIR_THRESH_DEG = 6.0
+
     # Umbral de distancia (mm) calculado por bbox para confirmar parada.
     # Se usa SOLO si el lidar no da lectura (fallback).
     SIGN_BBOX_STOP_MM = 350
@@ -127,7 +131,7 @@ class AutonomousFSM:
         self._state        = FSMState.CRUCERO
         self._resume_speed = 0.0
         self._active       = True
-        self._apply_lights(FSMState.CRUCERO)
+        self._apply_lights()
         print("[FSM] Modo autónomo ACTIVADO")
 
     def deactivate(self) -> None:
@@ -176,7 +180,10 @@ class AutonomousFSM:
             case FSMState.REANUDAR:
                 self._do_reanudar()
 
-        # ── 3. Avanzar parpadeo de direccionales (no bloquea) ──────────────
+        # ── 3. Refrescar luces según estado + dirección actual ──────────────
+        self._apply_lights()
+
+        # ── 4. Avanzar parpadeo de direccionales (no bloquea) ──────────────
         if self.signals is not None:
             self.signals.tick()
 
@@ -284,26 +291,35 @@ class AutonomousFSM:
             self.pid.reset()
 
         # Actualizar luces (direccionales + freno) según el nuevo estado
-        self._apply_lights(new_state)
+        self._apply_lights()
 
     # ─── Luces según estado ───────────────────────────────────────────────────
-    def _apply_lights(self, state: FSMState) -> None:
+    def _apply_lights(self) -> None:
         """
-        Mapeo estado → luces:
-          CRUCERO    → signals OFF,    brake OFF
-          PRECAUCION → signals HAZARD, brake OFF   (aviso de frenado)
-          FRENADO    → signals HAZARD, brake ON
-          ESPERA     → signals HAZARD, brake ON
-          REANUDAR   → signals OFF,    brake OFF
+        Mapeo estado → luces (se llama en cada tick para que las direccionales
+        sigan al ángulo del servo en CRUCERO/REANUDAR):
+          CRUCERO    → signals LEFT/RIGHT/OFF según ángulo,  brake OFF
+          PRECAUCION → signals HAZARD,                       brake OFF
+          FRENADO    → signals HAZARD,                       brake ON
+          ESPERA     → signals HAZARD,                       brake ON
+          REANUDAR   → signals LEFT/RIGHT/OFF según ángulo,  brake OFF
         """
         if self.signals is not None:
-            if state in (FSMState.PRECAUCION, FSMState.FRENADO, FSMState.ESPERA):
+            if self._state in (FSMState.PRECAUCION, FSMState.FRENADO, FSMState.ESPERA):
                 self.signals.set_mode(SignalMode.HAZARD)
+            elif self._state in (FSMState.CRUCERO, FSMState.REANUDAR):
+                deviation = self.steering.current_angle - self.SERVO_CENTER
+                if   deviation < -self.SIGNAL_DIR_THRESH_DEG:
+                    self.signals.set_mode(SignalMode.LEFT)
+                elif deviation > +self.SIGNAL_DIR_THRESH_DEG:
+                    self.signals.set_mode(SignalMode.RIGHT)
+                else:
+                    self.signals.set_mode(SignalMode.OFF)
             else:
                 self.signals.set_mode(SignalMode.OFF)
 
         if self.brake_light is not None:
-            if state in (FSMState.FRENADO, FSMState.ESPERA):
+            if self._state in (FSMState.FRENADO, FSMState.ESPERA):
                 self.brake_light.on()
             else:
                 self.brake_light.off()
