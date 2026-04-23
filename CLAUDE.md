@@ -58,6 +58,27 @@ See `TMR2026/SETUP.md` for dtoverlay config and udev rules.
 - `control/fsm.py` — 5-state FSM: `CRUCERO → PRECAUCION → FRENADO → ESPERA → REANUDAR`. Stop wait uses `time.monotonic()`, never `sleep()`. `brake()` is instantaneous and must not be wrapped/changed
 - `control/pid_controller.py` — generic PID with anti-windup and derivative-on-measurement, used for steering (lane error → servo angle)
 
+### Vehicle lighting (signals + brake)
+Three GPIO LEDs driven via `lgpio` chip 4 (BCM 19 left, 20 right, 16 brake — see `config.py`):
+- `hardware/signals.py` — `TurnSignals` with modes `OFF / LEFT / RIGHT / HAZARD`. Blink at 2 Hz (TMR regulation) is computed each frame from `time.monotonic()`; no thread, no sleep. Caller must invoke `signals.tick()` every loop iteration.
+- `hardware/brake_light.py` — simple `on()` / `off()` (idempotent — only writes GPIO on state change).
+- `control/fsm.py:_apply_lights()` runs every tick (not just on transitions). In `CRUCERO`/`REANUDAR` it reads `steering.current_angle` vs `SERVO_CENTER`; deviation beyond `SIGNAL_DIR_THRESH_DEG` (6°) sets `LEFT` or `RIGHT`. In `PRECAUCION`/`FRENADO`/`ESPERA` it forces `HAZARD` and `brake_light.on()`. Anywhere else → all OFF.
+- `main.py` mirrors this for non-FSM modes:
+  - `_do_standby` / `_do_vision` → all signals OFF, brake OFF.
+  - `_do_manual` → joystick `steer_raw < -0.15` → LEFT, `> +0.15` → RIGHT, else OFF. `brake_light.on()` when `motor.current_duty < -1.0` (reversing).
+  - `signals.tick()` is called once per frame in the main loop, after `_run_mode()`, so blink is always advanced regardless of mode.
+
+### Steering inversion
+The servo is mounted reversed on this chassis. `config.py:STEERING_INVERTED = True` flips the physical write inside `SteeringDriver.set_angle()`:
+- `physical = 2 * SERVO_CENTER_ANGLE - angle_deg` is sent to the servo.
+- `current_angle` always returns the **logical** angle (90 = recto, <90 = izq, >90 = der).
+- All consumers (FSM lights, PID, signals, telemetry) see the logical convention. Never invert per-mode in callers — fix it at the driver if hardware changes.
+
+### Telemetry log lines
+- `_do_manual` prints (carriage-return updated): `[MAN] steer:±x.xx (angle°)  t:y.yy  b:z.zz  duty:±NN%  signs:<label>@<cm>cm, …`
+- `_log_autonomous` (called every tick after `fsm.update`) prints: `[AUT] <STATE>  err:±NNNpx  angle:NN.N°  duty:±NN%  lidar:NNNNmm  signs:<label>@<cm>cm, …`
+- `signs:` field shows up to 2 detections from `SignDetector.get_detections()`; `—` if empty. This is the only place YOLO output is currently surfaced to the operator.
+
 ### Alternative modules (exist but not wired into main.py)
 These are full implementations kept for future wiring. Treat as library code:
 - `hardware/camera_manager.py` — IMX500 NPU-side inference (alternative to CPU sign detector)
@@ -87,8 +108,16 @@ These are full implementations kept for future wiring. Treat as library code:
 - **Never import from `_legacy/`** inside `TMR2026/`.
 - **ESPERA state must use `time.monotonic()`**, not `time.sleep()` — the loop must keep serving the FSM.
 - Turn-signal / hazard blink rate is `2 Hz` (per TMR regulation).
+- **Steering inversion lives in `SteeringDriver.set_angle()` only** (driven by `config.py:STEERING_INVERTED`). Never re-invert in FSM, PID, signals, or per-mode code; always trust `current_angle` as the logical value.
+- **`signals.tick()` must be called every main-loop iteration** (after `_run_mode()`), or LEDs freeze mid-blink.
 
 ## Known inconsistencies
 
 - `TMR2026/main.py:46` hardcodes `SERVO_CHANNEL=0` but `config.py:SERVO_CHANNEL=15`. `main.py` wins at runtime because it doesn't import `SERVO_CHANNEL` from config.
 - `TMR2026/main.py:51` hardcodes `TOF_XSHUT_PIN=17`. If new GPIO LEDs reuse pin 17 the ToF bring-up will fight them — keep LED pins off 17.
+- LED pins (BCM 19/20/16) and `vision_config.yaml` `gpio:` block (BCM 5/6 hazard, 19/20 turns) overlap on 19/20. Production main.py uses 19/20 for turn signals; `vision_module.py` reads its own pins from the YAML — they live in separate processes so there's no live conflict, but don't run both at once.
+
+## Common Pi-side gotchas
+
+- `lgpio.error: 'GPIO not allocated'` on `python main.py` usually means the systemd service is holding pins: `sudo systemctl stop carrito_tmr` before manual runs.
+- Old folders from the pre-reorg layout (`AUTO_YOLO/`, `CAMARA/`, `CONTROL/`, …) may need `sudo rm -rf` if they were created under root by a prior `sudo` run.
