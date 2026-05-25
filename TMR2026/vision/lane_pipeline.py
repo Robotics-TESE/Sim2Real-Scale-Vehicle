@@ -53,15 +53,14 @@ class LanePipeline:
 
     # ── Puntos de perspectiva BEV (fracción del ancho/alto del frame) ─────────
     # Trapecio en el frame original que se mapea a un rectángulo en BEV.
-    # CALIBRADO para: cámara a 22 cm de altura, carro 20×35 cm.
-    # Con esta altura la perspectiva ve más piso → trapecio más ancho abajo
-    # y un poco más alto arriba para captar el carril más adelante.
+    # CALIBRADO para: cámara a 22 cm de altura, pista negra con líneas blancas.
+    # Trapecio CERRADO para capturar SOLO la pista y nada del entorno alrededor.
     #   [bot-izq, bot-der, top-der, top-izq]
     BEV_SRC_RATIO = np.float32([
-        [0.05, 1.00],   # abajo-izquierda (más ancho)
-        [0.95, 1.00],   # abajo-derecha   (más ancho)
-        [0.60, 0.60],   # arriba-derecha  (un poco más arriba y estrecho)
-        [0.40, 0.60],   # arriba-izquierda
+        [0.15, 1.00],   # abajo-izquierda (margen lateral grande, ignora bordes)
+        [0.85, 1.00],   # abajo-derecha
+        [0.55, 0.62],   # arriba-derecha  (trapecio cerrado: foco en la pista)
+        [0.45, 0.62],   # arriba-izquierda
     ])
     BEV_DST_RATIO = np.float32([
         [0.20, 1.00],
@@ -71,20 +70,23 @@ class LanePipeline:
     ])
 
     # ── Filtro HSV para blanco ────────────────────────────────────────────────
-    # Pista negra brillante → reflejos tienen S alto (gris especular) o S muy bajo
-    # pero V muy alto (sobreexposición puntual).
-    # Blanco real: S bajo, V medio-alto.
+    # Pista negra brillante + entorno claro (pared, ropa, otros objetos blancos
+    # alrededor) → necesitamos blanco MUY brillante y MUY desaturado para
+    # rechazar todo lo que NO es la línea de la pista.
     #
-    # V_min=130 funciona desde luz tenue (linterna del celular ~100–200 lx)
-    # hasta luz fuerte (lámpara directa). Si el plástico negro empieza a
-    # contar como "blanco" en sombras profundas, sube V_min a 150–160.
-    HSV_WHITE_LO = np.array([  0,  0, 130])   # H, S_min=0, V_min=130
-    HSV_WHITE_HI = np.array([179, 60, 255])   # H, S_max=60 (rechaza grises brillantes)
+    # V_min=200 elimina grises medios del entorno (ropa, paredes mate).
+    # S_max=40 sigue aceptando blanco real pero rechaza grises azulados/cremas.
+    #
+    # Si en luz tenue las líneas se ven débiles, baja V_min a 170-180.
+    # Si en luz fuerte el plástico negro brillante "se cuela", sube V_min a 220.
+    HSV_WHITE_LO = np.array([  0,  0, 200])   # H, S_min=0,  V_min=200 (muy brillante)
+    HSV_WHITE_HI = np.array([179, 40, 255])   # H, S_max=40 (muy desaturado)
 
     # ── Sliding Windows ───────────────────────────────────────────────────────
     N_WINDOWS  = 9     # Número de franjas horizontales en el BEV
-    WIN_MARGIN = 70    # ±px alrededor del centro previo para buscar píxeles
-    MIN_PIX    = 40    # Mínimo de píxeles blancos para aceptar una ventana
+    WIN_MARGIN = 60    # ±px alrededor del centro previo (más estrecho)
+    MIN_PIX    = 80    # Mínimo px blancos por ventana — subido de 40 → 80
+                       # para ignorar ruido suelto y manchas pequeñas
 
     # ── Suavizado temporal ────────────────────────────────────────────────────
     EMA_ALPHA  = 0.45  # Bajado de 0.65 → menos oscilación del servo
@@ -109,8 +111,9 @@ class LanePipeline:
         self._debug = debug
         self._right_bias = max(0.0, min(1.0, float(right_bias)))
 
-        # ROI: ignorar la mitad superior del frame
-        self._roi_y = frame_h // 2
+        # ROI: ignorar la parte superior del frame (entorno, paredes, objetos)
+        # Subido de 50% a 55% para descartar más del entorno con la cámara a 22 cm.
+        self._roi_y = int(frame_h * 0.55)
 
         # Calcular matrices de perspectiva
         src = self.BEV_SRC_RATIO.copy()
@@ -221,8 +224,10 @@ class LanePipeline:
         left_x   = int(np.argmax(hist[:mid]))
         right_x  = int(np.argmax(hist[mid:])) + mid
 
-        has_left  = hist[left_x]  > 200
-        has_right = hist[right_x] > 200
+        # Umbral del histograma: subido de 200 → 500 para descartar picos de
+        # ruido del entorno (paredes/cosas blancas fuera de la pista).
+        has_left  = hist[left_x]  > 500
+        has_right = hist[right_x] > 500
 
         if not has_left and not has_right:
             return LaneResult(error_px=self._smooth_error, confidence=0.0)

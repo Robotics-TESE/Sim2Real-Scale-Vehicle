@@ -17,6 +17,7 @@ import threading
 import time
 from typing import Optional
 
+import cv2
 import numpy as np
 
 try:
@@ -25,6 +26,59 @@ except ImportError:
     # Valores de respaldo si no se corre desde TMR2026/ como CWD
     STOP_SIGN_REAL_HEIGHT_M = 0.18
     CAMERA_FOCAL_LENGTH_PX  = 490.0
+
+
+# ── Detector de STOP por COLOR (respaldo cuando YOLO falla) ──────────────────
+# Busca regiones de color rojo/granate/púrpura en HSV.
+# Se activa SOLO si YOLO no detecta nada para no duplicar bboxes.
+#
+# Cubre dos rangos de rojo (el matiz cruza el límite 0/179 de HSV).
+_RED_HSV_LO_1 = np.array([  0, 100,  60])   # rojo brillante
+_RED_HSV_HI_1 = np.array([ 12, 255, 255])
+_RED_HSV_LO_2 = np.array([165, 100,  60])   # rojo oscuro / magenta
+_RED_HSV_HI_2 = np.array([179, 255, 255])
+# Púrpura / morado (señales TMR estilizadas con fondo morado)
+_PURPLE_HSV_LO = np.array([120,  60,  40])
+_PURPLE_HSV_HI = np.array([160, 255, 255])
+
+# Área mínima del contorno (px²) para considerarlo señal — ~15×15 px o más
+_COLOR_MIN_AREA = 600
+# Razón de aspecto permitida (ancho/alto). Una señal STOP es casi cuadrada.
+_COLOR_ASPECT_MIN = 0.55
+_COLOR_ASPECT_MAX = 1.80
+
+
+def _detect_red_blob(frame_bgr: np.ndarray):
+    """
+    Devuelve (x1, y1, x2, y2, area) del contorno rojo/púrpura más grande,
+    o None si no encuentra nada plausible.
+    """
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    m1 = cv2.inRange(hsv, _RED_HSV_LO_1,    _RED_HSV_HI_1)
+    m2 = cv2.inRange(hsv, _RED_HSV_LO_2,    _RED_HSV_HI_2)
+    m3 = cv2.inRange(hsv, _PURPLE_HSV_LO,   _PURPLE_HSV_HI)
+    mask = cv2.bitwise_or(cv2.bitwise_or(m1, m2), m3)
+    # Limpiar ruido
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  k)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
+                                cv2.CHAIN_APPROX_SIMPLE)
+    best = None
+    best_area = 0
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        area = w * h
+        if area < _COLOR_MIN_AREA:
+            continue
+        aspect = w / max(1.0, h)
+        if not (_COLOR_ASPECT_MIN <= aspect <= _COLOR_ASPECT_MAX):
+            continue
+        if area > best_area:
+            best_area = area
+            best = (x, y, x + w, y + h, area)
+    return best
 
 
 class Detection:
@@ -195,6 +249,23 @@ class SignDetector:
             except Exception as e:
                 print(f"[YOLO] Error de inferencia: {e}")
                 raw_dets = []
+
+            # ─── Respaldo por color cuando YOLO no detecta STOP ───────────────
+            # Si YOLO no encontró 'stop_sign' pero hay una región roja/púrpura
+            # grande en el frame (señal con estilo distinto al training set),
+            # la reportamos como stop_sign con confianza moderada (0.55).
+            has_yolo_stop = any(d.label == "stop_sign" for d in raw_dets)
+            if not has_yolo_stop:
+                blob = _detect_red_blob(frame)
+                if blob is not None:
+                    x1, y1, x2, y2, area = blob
+                    height_px = max(1, y2 - y1)
+                    distance_m = (STOP_SIGN_REAL_HEIGHT_M
+                                  * CAMERA_FOCAL_LENGTH_PX) / height_px
+                    raw_dets.append(Detection(
+                        "stop_sign", 0.55, x1, y1, x2, y2,
+                        distance_m=distance_m,
+                    ))
 
             # ─── Histéresis: sólo publicamos etiquetas con N frames seguidos ───
             confirmed = self._apply_hysteresis(raw_dets)
