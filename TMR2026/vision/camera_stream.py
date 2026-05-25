@@ -16,6 +16,22 @@ from typing import Optional
 import cv2
 import numpy as np
 
+try:
+    from config import (
+        CAMERA_AWB_MODE,
+        CAMERA_CONTRAST,
+        CAMERA_SATURATION,
+        CAMERA_SHARPNESS,
+        CAMERA_DENOISE,
+    )
+except ImportError:
+    # Fallback si camera_stream se importa fuera de TMR2026/ como CWD
+    CAMERA_AWB_MODE   = 4
+    CAMERA_CONTRAST   = 1.5
+    CAMERA_SATURATION = 1.8
+    CAMERA_SHARPNESS  = 4.0
+    CAMERA_DENOISE    = 2
+
 
 class CameraStream:
     """
@@ -59,11 +75,11 @@ class CameraStream:
                 "FrameDurationLimits": (1_000_000 // fps, 1_000_000 // fps),
                 "AeEnable":            True,
                 "AwbEnable":           True,
-                "AwbMode":             4,    # Indoor — corrige tono azulado
-                "Contrast":            1.4,
-                "Saturation":          1.6,
-                "Sharpness":           3.0,
-                "NoiseReductionMode":  2,    # CDN_Fast
+                "AwbMode":             CAMERA_AWB_MODE,   # 4 = Indoor
+                "Contrast":            CAMERA_CONTRAST,   # config.py
+                "Saturation":          CAMERA_SATURATION, # config.py — más rojo en STOP
+                "Sharpness":           CAMERA_SHARPNESS,  # config.py — bordes nítidos
+                "NoiseReductionMode":  CAMERA_DENOISE,    # 2 = CDN_Fast
             },
         )
         self._picam2.configure(cfg)

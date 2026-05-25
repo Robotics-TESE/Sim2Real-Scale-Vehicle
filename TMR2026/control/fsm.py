@@ -39,6 +39,11 @@ except Exception:
     class SignalMode:
         OFF = "OFF"; LEFT = "LEFT"; RIGHT = "RIGHT"; HAZARD = "HAZARD"
 
+try:
+    from config import LANE_MIN_CONFIDENCE as _CFG_LANE_MIN_CONF
+except ImportError:
+    _CFG_LANE_MIN_CONF = 0.20
+
 
 class FSMState(Enum):
     CRUCERO    = auto()   # Avance normal, PID de dirección
@@ -77,7 +82,7 @@ class AutonomousFSM:
     LIDAR_STOP_MM   = 300     # mm — distancia para pasar de PRECAUCIÓN → FRENADO
     ESPERA_S        = 5.0     # segundos de parada obligatoria (reglamento TMR)
     COOLDOWN_S      = 3.0     # segundos tras REANUDAR en que se ignoran señales
-    MIN_LANE_CONF   = 0.25    # confianza mínima de carril para avanzar
+    MIN_LANE_CONF   = _CFG_LANE_MIN_CONF  # confianza mínima carril (config.py: 0.20)
 
     # ── Ángulo servo ─────────────────────────────────────────────────────────
     SERVO_CENTER    = 90.0
@@ -89,7 +94,10 @@ class AutonomousFSM:
     SIGNAL_DIR_THRESH_DEG = 12.0
 
     # Umbral de distancia (mm) calculado por bbox para confirmar parada.
-    # Se usa SOLO si el lidar no da lectura (fallback).
+    # Se usa SOLO si el lidar no da lectura (fallback). El valor real al
+    # quedar quieto suele ser ~80 mm menor por la inercia del soft-cut,
+    # con 350 mm aquí el carro debe quedar dentro del rango 240–300 mm del
+    # reglamento TMR (270 ± 30 mm).
     SIGN_BBOX_STOP_MM = 350
 
     def __init__(self, motor, steering, pid, signals=None, brake_light=None):
