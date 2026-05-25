@@ -138,6 +138,51 @@ from config import (
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# LECTOR DE TECLADO (no bloqueante) — alternativa al gamepad
+# ─────────────────────────────────────────────────────────────────────────────
+class _KeyboardReader:
+    """
+    Lee una tecla por iteración desde stdin SIN bloquear el bucle de control.
+    Pone el TTY en modo cbreak (cada tecla llega al instante, sin Enter).
+    Si stdin no es TTY (e.g. ejecución bajo systemd), queda inerte.
+    Restaura los atributos del terminal en close().
+    """
+
+    def __init__(self):
+        self.enabled = False
+        self._old_attrs = None
+        try:
+            import termios, tty
+            if not sys.stdin.isatty():
+                return
+            self._old_attrs = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin.fileno())
+            self.enabled = True
+        except Exception as e:
+            print(f"[KB] Teclado no disponible: {e}")
+
+    def get_key(self):
+        if not self.enabled:
+            return None
+        import select
+        r, _, _ = select.select([sys.stdin], [], [], 0)
+        if r:
+            return sys.stdin.read(1)
+        return None
+
+    def close(self):
+        if self._old_attrs is None:
+            return
+        try:
+            import termios
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_attrs)
+        except Exception:
+            pass
+        self._old_attrs = None
+        self.enabled = False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CLASE PRINCIPAL
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -203,6 +248,12 @@ class VehicleTMR:
         self._joystick = None
         self._init_gamepad()
 
+        # ── Teclado (alternativa sin gamepad) ─────────────────────
+        self._kb = _KeyboardReader()
+        if self._kb.enabled:
+            print("[KB] Atajos:  A=MANUAL  B=VISION  X=AUTO  "
+                  "Space=EMERG  S=STANDBY  Q=salir")
+
         # ── Estado interno ────────────────────────────────────────
         self._mode            = self.Mode.STANDBY
         self._running         = True
@@ -235,6 +286,7 @@ class VehicleTMR:
 
                 self._pump_gamepad_events()
                 self._process_gamepad()
+                self._poll_keyboard()
                 self._update_vision()
                 self._run_mode(dt)
 
@@ -340,6 +392,66 @@ class VehicleTMR:
                 self.motor.brake()
                 self._set_mode(self.Mode.VISION)
             return
+
+    # ─── Teclado (espejo del gamepad) ─────────────────────────────────────────
+
+    def _poll_keyboard(self) -> None:
+        if not self._kb.enabled:
+            return
+        key = self._kb.get_key()
+        if key:
+            self._process_key(key)
+
+    def _process_key(self, key: str) -> None:
+        """
+        A=MANUAL  B=VISION  X=AUTO (toggle)
+        Space=EMERG  S=STANDBY  Q=salir
+        Espacio y Q ignoran el cooldown (parada inmediata).
+        """
+        k = key.lower()
+
+        if k == "q":
+            print("\n[KB] Salida solicitada.")
+            self._running = False
+            return
+
+        if key == " ":
+            print("\n[KB] EMERGENCIA — freno + MANUAL")
+            self.motor.brake()
+            self.fsm.deactivate()
+            self._set_mode(self.Mode.MANUAL)
+            return
+
+        if time.monotonic() - self._last_mode_t < self.MODE_COOLDOWN_S:
+            return
+
+        if k == "a":
+            print("\n[KB] -> MANUAL")
+            self.fsm.deactivate()
+            self._set_mode(self.Mode.MANUAL)
+        elif k == "b":
+            if self._mode == self.Mode.VISION:
+                print("\n[KB] VISION -> MANUAL")
+                self._set_mode(self.Mode.MANUAL)
+            else:
+                print("\n[KB] -> VISION (preview cámara)")
+                self.motor.brake()
+                self._set_mode(self.Mode.VISION)
+        elif k == "x":
+            if self._mode == self.Mode.AUTONOMOUS:
+                print("\n[KB] AUTONOMOUS -> MANUAL")
+                self.fsm.deactivate()
+                self._set_mode(self.Mode.MANUAL)
+            else:
+                print("\n[KB] -> AUTONOMOUS")
+                self.motor.brake()
+                self._set_mode(self.Mode.AUTONOMOUS)
+                self.fsm.activate()
+        elif k == "s":
+            print("\n[KB] -> STANDBY")
+            self.fsm.deactivate()
+            self.motor.brake()
+            self._set_mode(self.Mode.STANDBY)
 
     def _set_mode(self, mode: str) -> None:
         if mode != self._mode:
@@ -564,14 +676,6 @@ class VehicleTMR:
             cv2.putText(vis, "Mascara HSV blanco",   (328, 14),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
-        # ── Bounding boxes YOLO ──
-        for d in dets:
-            cv2.rectangle(vis, (d.x1, d.y1), (d.x2, d.y2), (0, 0, 255), 2)
-            dist_txt = f" {(d.distance_m or 0)*100:.0f}cm" if d.distance_m else ""
-            cv2.putText(vis, f"{d.label} {d.confidence:.0%}{dist_txt}",
-                        (d.x1, max(d.y1 - 6, 12)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
-
         angle_target = max(
             SERVO_MIN, min(SERVO_MAX, SERVO_CENTER + self.pid.last_output)
         )
@@ -604,6 +708,18 @@ class VehicleTMR:
                     (8, CAMERA_H - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2, cv2.LINE_AA)
 
+        # ── Bounding boxes YOLO (AL FINAL: siempre encima de mosaico + paneles) ──
+        for d in dets:
+            cv2.rectangle(vis, (d.x1, d.y1), (d.x2, d.y2), (0, 255, 0), 2)
+            dist_txt = f" {(d.distance_m or 0)*100:.0f}cm" if d.distance_m else ""
+            label_txt = f"{d.label} {d.confidence:.0%}{dist_txt}"
+            (tw, th), _ = cv2.getTextSize(label_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            ly = max(d.y1 - 6, th + 4)
+            cv2.rectangle(vis, (d.x1, ly - th - 4), (d.x1 + tw + 4, ly + 2),
+                          (0, 0, 0), -1)
+            cv2.putText(vis, label_txt, (d.x1 + 2, ly - 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+
         cv2.imshow("TMR 2026 - Vision Debug", vis)
         cv2.waitKey(1)
 
@@ -627,6 +743,8 @@ class VehicleTMR:
 
     def _shutdown(self) -> None:
         print("\n[SYS] Apagando sistema...")
+        try:    self._kb.close()
+        except: pass
         if _DISPLAY:
             cv2.destroyAllWindows()
         self.fsm.deactivate()

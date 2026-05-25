@@ -48,62 +48,74 @@ YOLO_CONF, YOLO_IMGSZ = 0.55, 320
 USE_YOLO = "--no-yolo" not in sys.argv
 
 
-def draw_overlay(frame, lane, pid, angle_target, fps, dets):
-    """Dibuja BEV + máscara + bboxes + caja con valores PID sobre el frame."""
-    vis = frame.copy()
-    H, W = vis.shape[:2]
+def _draw_panel(img, x, y, w, h, lines):
+    """Caja semitransparente con borde + texto multi-línea (igual que main.py)."""
+    ov = img.copy()
+    cv2.rectangle(ov, (x, y), (x + w, y + h), (0, 0, 0), -1)
+    cv2.addWeighted(ov, 0.55, img, 0.45, 0, dst=img)
+    cv2.rectangle(img, (x, y), (x + w, y + h), (255, 220, 0), 1)
+    for i, line in enumerate(lines):
+        cv2.putText(img, line, (x + 8, y + 20 + i * 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    (255, 220, 0), 1, cv2.LINE_AA)
 
-    # Línea central del frame y centro detectado del carril.
-    cv2.line(vis, (W // 2, H), (W // 2, H // 2), (0, 150, 150), 1)
-    cx = max(0, min(W - 1, W // 2 + int(lane.error_px)))
-    color = (0, 255, 0) if lane.confidence >= 0.5 else (0, 80, 255)
-    cv2.line(vis, (cx, H), (cx, H // 2), color, 3)
 
-    # Mosaicos BEV + máscara en la franja superior.
+def draw_overlay(frame, lane_pipe, lane, pid, angle_target, fps, dets):
+    """Replica _render_debug_view de main.py (sin motor/FSM/lidar reales)."""
+    H, W = frame.shape[:2]
+
+    # Frame con línea central del carril dibujada por el propio pipeline.
+    vis = lane_pipe.draw_debug(frame, lane)
+
+    # ── Mosaico superior: BEV + máscara HSV ──
     if lane.bev_frame is not None and lane.mask_frame is not None:
-        small_bev  = cv2.resize(lane.bev_frame,  (320, 180))
-        small_mask = cv2.resize(lane.mask_frame, (320, 180))
-        vis[0:180, 0:320]   = small_bev
-        vis[0:180, 320:640] = small_mask
+        vis[0:180, 0:320]   = cv2.resize(lane.bev_frame,  (320, 180))
+        vis[0:180, 320:640] = cv2.resize(lane.mask_frame, (320, 180))
+        cv2.putText(vis, "BEV (ojo de aguila)", (8, 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        cv2.putText(vis, "Mascara HSV blanco",   (328, 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
-    # Bounding boxes YOLO.
+    # ── Panel inferior izquierdo: PID + error + lidar(—) ──
+    _draw_panel(vis, 8, 200, 320, 160, lines=[
+        f"MODO  : TEST",
+        f"err   :{lane.error_px:+7.1f}px  conf:{lane.confidence:.0%}",
+        f"P     :{pid.last_p:+7.2f}   kp={pid.kp:.3f}",
+        f"I     :{pid.last_i:+7.2f}   ki={pid.ki:.3f}",
+        f"D     :{pid.last_d:+7.2f}   kd={pid.kd:.3f}",
+        f"corr  :{pid.last_output:+7.2f}d -> servo {angle_target:5.1f}d",
+        f"lidar :---     FPS:{fps:5.1f}",
+    ])
+
+    # ── Panel inferior derecho: objetos detectados ──
+    if dets:
+        obj_lines = ["OBJETOS DETECTADOS:"]
+        for d in dets[:5]:
+            dist = f" @{(d.distance_m or 0)*100:.0f}cm" if d.distance_m else ""
+            obj_lines.append(f"- {d.label}  {d.confidence:.0%}{dist}")
+    else:
+        obj_lines = [
+            "OBJETOS DETECTADOS:",
+            "- (ninguno)" if USE_YOLO else "- YOLO OFF (--no-yolo)",
+        ]
+    _draw_panel(vis, 336, 200, 296, 160, lines=obj_lines)
+
+    # ── Barra inferior con label de modo (no hay FSM en el test) ──
+    cv2.putText(vis, f"TEST  duty:  0%   ('q'/ESC salir)",
+                (8, H - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2, cv2.LINE_AA)
+
+    # ── Bounding boxes YOLO (AL FINAL: siempre encima de mosaico + paneles) ──
     for d in dets:
-        cv2.rectangle(vis, (d.x1, d.y1), (d.x2, d.y2), (0, 0, 255), 2)
+        cv2.rectangle(vis, (d.x1, d.y1), (d.x2, d.y2), (0, 255, 0), 2)
         dist_txt = f" {(d.distance_m or 0) * 100:.0f}cm" if d.distance_m else ""
-        cv2.putText(
-            vis, f"{d.label} {d.confidence:.0%}{dist_txt}",
-            (d.x1, max(d.y1 - 6, 12)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA,
-        )
-
-    # Caja con valores PID (panel inferior-izquierdo).
-    panel_x, panel_y = 8, 200
-    panel_w, panel_h = 320, 140
-    overlay = vis.copy()
-    cv2.rectangle(
-        overlay, (panel_x, panel_y),
-        (panel_x + panel_w, panel_y + panel_h),
-        (0, 0, 0), thickness=-1,
-    )
-    vis = cv2.addWeighted(overlay, 0.55, vis, 0.45, 0)
-
-    y = panel_y + 20
-    line_h = 20
-
-    def put(text):
-        nonlocal y
-        cv2.putText(
-            vis, text, (panel_x + 8, y),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 220, 0), 1, cv2.LINE_AA,
-        )
-        y += line_h
-
-    put(f"err   :{lane.error_px:+7.1f}px  conf:{lane.confidence:.0%}")
-    put(f"P     :{pid.last_p:+7.2f}   kp={pid.kp:.3f}")
-    put(f"I     :{pid.last_i:+7.2f}   ki={pid.ki:.3f}")
-    put(f"D     :{pid.last_d:+7.2f}   kd={pid.kd:.3f}")
-    put(f"corr  :{pid.last_output:+7.2f}d  servo->{angle_target:5.1f}d")
-    put(f"FPS   :{fps:5.1f}    YOLO:{'ON' if USE_YOLO else 'OFF'}")
+        label_txt = f"{d.label} {d.confidence:.0%}{dist_txt}"
+        (tw, th), _ = cv2.getTextSize(label_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        ly = max(d.y1 - 6, th + 4)
+        cv2.rectangle(vis, (d.x1, ly - th - 4), (d.x1 + tw + 4, ly + 2),
+                      (0, 0, 0), -1)
+        cv2.putText(vis, label_txt, (d.x1 + 2, ly - 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
 
     return vis
 
@@ -167,8 +179,8 @@ def main():
                 fps_count = 0
                 fps_t0 = now
 
-            vis = draw_overlay(frame, lane, pid, angle_target, fps, dets)
-            cv2.imshow("TMR test - camara + lane + PID", vis)
+            vis = draw_overlay(frame, lane_pipe, lane, pid, angle_target, fps, dets)
+            cv2.imshow("TMR 2026 - Vision Debug (TEST)", vis)
 
             sign_txt = (
                 ", ".join(f"{d.label}({d.confidence:.0%})" for d in dets)
