@@ -28,6 +28,18 @@ except ImportError:
     STOP_SIGN_REAL_HEIGHT_M = 0.04
     CAMERA_FOCAL_LENGTH_PX  = 490.0
 
+# Altura real (m) de cada clase del modelo tmr_signs.pt — para estimar
+# distancia por pinhole. Solo estas 7 clases se aceptan del modelo.
+SIGN_REAL_HEIGHT_M = {
+    "stop":     STOP_SIGN_REAL_HEIGHT_M,  # octágono (medido 4 cm)
+    "red":      0.06,   # luz de semáforo
+    "green":    0.06,
+    "yellow":   0.06,
+    "left":     0.05,   # flecha direccional
+    "right":    0.05,
+    "straight": 0.05,
+}
+
 
 # ── Detector de STOP por COLOR (respaldo cuando YOLO falla) ──────────────────
 # Busca regiones de color rojo/granate/púrpura en HSV.
@@ -344,8 +356,9 @@ class SignDetector:
                 label  = (self._model.names.get(cls_id, str(cls_id))
                           .lower().replace(" ", "_"))
 
-                # Filtrar solo clases relevantes para TMR
-                if not any(k in label for k in ("stop", "crosswalk", "cross")):
+                # Aceptar las 7 clases del modelo tmr_signs.pt:
+                #   green, left, red, right, stop, straight, yellow
+                if label not in SIGN_REAL_HEIGHT_M:
                     continue
 
                 x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
@@ -357,20 +370,18 @@ class SignDetector:
 
                 # Ignorar bboxes muy pequeños (señal muy lejana)
                 area = (x2 - x1) * (y2 - y1)
-                if area < 150:   # bajado de 400 para detectar señales más lejanas
+                if area < 150:
                     continue
 
-                # Normalizar etiqueta
-                normalized = "stop_sign" if "stop" in label else "crosswalk"
+                # "stop" se expone como "stop_sign" (lo que ya consume el FSM);
+                # las demás clases conservan su nombre del modelo.
+                normalized = "stop_sign" if label == "stop" else label
 
-                # Estimación de distancia por pinhole:
+                # Distancia por pinhole con la altura real de CADA clase:
                 #   dist_m = (alto_real_m × focal_px) / alto_bbox_px
-                # Sólo la calculamos para stop_sign (altura real conocida).
-                distance_m: Optional[float] = None
-                height_px = max(1, y2 - y1)
-                if normalized == "stop_sign":
-                    distance_m = (STOP_SIGN_REAL_HEIGHT_M
-                                  * CAMERA_FOCAL_LENGTH_PX) / height_px
+                height_px  = max(1, y2 - y1)
+                real_h     = SIGN_REAL_HEIGHT_M[label]
+                distance_m = (real_h * CAMERA_FOCAL_LENGTH_PX) / height_px
 
                 dets.append(Detection(
                     normalized, conf, x1, y1, x2, y2,

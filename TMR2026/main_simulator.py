@@ -224,6 +224,7 @@ class VehicleSimulator:
         self._running         = True
         self._last_lane       = LaneResult(error_px=0.0, confidence=0.0)
         self._start_time      = time.monotonic()
+        self._sign_action     = ""   # texto de acción de la señal detectada
 
         # ── Metrics para Phase 1 validation ────────────────────────────────
         self._metrics = {
@@ -303,15 +304,48 @@ class VehicleSimulator:
         self.fsm.lane_error   = self._last_lane.error_px
         self.fsm.lane_conf    = self._last_lane.confidence
         self.fsm.lidar_mm     = self.sensor.front_mm
-        self.fsm.sign_visible = self.sign_det.has_any_sign()
+
+        # Señales que OBLIGAN a frenar: STOP y semáforo en ROJO.
+        # (green/yellow/left/right/straight NO frenan; se manejan aparte.)
+        stop_like = self.sign_det.has_sign("stop_sign") or self.sign_det.has_sign("red")
+        self.fsm.sign_visible = stop_like
 
         if self.sensor.front_mm is not None:
             self._metrics["lidar_readings"].append(self.sensor.front_mm)
 
-        # Distancia a STOP
-        closest = self.sign_det.closest_sign("stop_sign")
+        # Distancia a la señal de frenado más cercana (STOP o rojo)
+        closest = (self.sign_det.closest_sign("stop_sign")
+                   or self.sign_det.closest_sign("red"))
         if closest is not None and closest.distance_m is not None:
             self.fsm.sign_distance_mm = closest.distance_m * 1000.0
+        else:
+            self.fsm.sign_distance_mm = None
+
+        # Acción según la señal detectada (para overlay + log).
+        self._sign_action = self._decide_sign_action()
+
+    # Acciones por tipo de señal (lo que el carro "hace" al verla).
+    SIGN_ACTIONS = {
+        "stop_sign": "ALTO total (5 s)",
+        "red":       "Semaforo ROJO: frenar",
+        "green":     "Semaforo VERDE: avanzar",
+        "yellow":    "Semaforo AMARILLO: precaucion",
+        "left":      "Flecha IZQUIERDA",
+        "right":     "Flecha DERECHA",
+        "straight":  "Seguir RECTO",
+    }
+
+    def _decide_sign_action(self) -> str:
+        """Devuelve el texto de acción de la señal más cercana detectada."""
+        dets = self.sign_det.get_detections()
+        if not dets:
+            return ""
+        # la más cercana (menor distancia) manda
+        dets = [d for d in dets if d.distance_m is not None]
+        if not dets:
+            return self.SIGN_ACTIONS.get(self.sign_det.get_detections()[0].label, "")
+        closest = min(dets, key=lambda d: d.distance_m)
+        return self.SIGN_ACTIONS.get(closest.label, closest.label)
 
     # ─── Modos de operación ───────────────────────────────────────────────
 
@@ -343,11 +377,12 @@ class VehicleSimulator:
         else:
             sign_txt = "—"
         lidar_txt = f"{self.sensor.front_mm:.0f}" if self.sensor.front_mm else "---"
+        action = self._sign_action or "—"
         print(f"\r[AUT] {self.fsm.state.name:<10}  "
               f"err:{self._last_lane.error_px:+5.0f}px  "
               f"angle:{self.steering.current_angle:5.1f}°  "
               f"duty:{self.motor.current_duty:+.0f}%  "
-              f"lidar:{lidar_txt}mm  signs:{sign_txt}   ",
+              f"lidar:{lidar_txt}mm  signs:{sign_txt}  -> {action}   ",
               end="", flush=True)
 
     def _do_standby(self) -> None:
