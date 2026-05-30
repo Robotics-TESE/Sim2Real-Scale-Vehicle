@@ -197,11 +197,13 @@ class VehicleSimulator:
         self.brake_light = NoOpBrakeLight()
 
         # ── Visión ─────────────────────────────────────────────────────────
-        # La cámara de Unity ahora imita la del Pi físico (22 cm, 15° abajo,
-        # FOV 60), así que usamos el MISMO BEV que el carro real (defaults de
-        # LanePipeline). Sim2Real fiel: misma cámara → mismo pipeline.
+        # Cámara como el Pi físico. roi_frac 0.40 = BEV mira más lejos (se ven
+        # los 2 carriles). right_bias 0.75 = el carro se acomoda en el carril
+        # DERECHO (objetivo a 75% hacia la línea derecha).
         self.lane_pipe = LanePipeline(
-            frame_w=CAMERA_W, frame_h=CAMERA_H, debug=_DISPLAY
+            frame_w=CAMERA_W, frame_h=CAMERA_H, debug=_DISPLAY,
+            right_bias=0.75,
+            roi_frac=0.40,
         )
         self.sign_det = SignDetector(
             model_path="weights/tmr_signs.pt",
