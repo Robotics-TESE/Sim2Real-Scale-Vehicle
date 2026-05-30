@@ -121,16 +121,21 @@ class LanePipeline:
         frame_h: int = 480,
         debug: bool = False,
         right_bias: float = RIGHT_BIAS,
+        roi_frac: float = 0.5,
+        bev_src_ratio=None,
     ):
         self._w     = frame_w
         self._h     = frame_h
         self._debug = debug
         self._right_bias = max(0.0, min(1.0, float(right_bias)))
 
-        # ROI: ignorar la mitad superior del frame. Volvimos a 50% para que
-        # el BEV capture más adelante (la pared/entorno ya lo descarta el
-        # filtro HSV estricto, no hace falta cortar tanto aquí).
-        self._roi_y = frame_h // 2
+        # Permite calibración distinta para el Pi (defaults) y el simulador
+        # (que pasa roi_frac / bev_src_ratio propios para su cámara Unity).
+        if bev_src_ratio is not None:
+            self.BEV_SRC_RATIO = np.float32(bev_src_ratio)
+
+        # ROI: ignorar la parte superior del frame. roi_frac configurable.
+        self._roi_y = int(frame_h * roi_frac)
 
         # Calcular matrices de perspectiva
         src = self.BEV_SRC_RATIO.copy()

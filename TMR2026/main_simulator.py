@@ -197,8 +197,19 @@ class VehicleSimulator:
         self.brake_light = NoOpBrakeLight()
 
         # ── Visión ─────────────────────────────────────────────────────────
+        # Calibración BEV específica para la cámara de Unity (adelante del
+        # carro, 35° abajo, FOV 75). roi_frac bajo = ve más pista; el trapecio
+        # sigue el carril en "V" para enderezar toda la pista en el ojo de
+        # águila. (El Pi mantiene sus defaults; esto es solo del simulador.)
         self.lane_pipe = LanePipeline(
-            frame_w=CAMERA_W, frame_h=CAMERA_H, debug=_DISPLAY
+            frame_w=CAMERA_W, frame_h=CAMERA_H, debug=_DISPLAY,
+            roi_frac=0.30,
+            bev_src_ratio=[
+                [0.18, 1.00],   # abajo-izquierda (línea izq cercana)
+                [0.82, 1.00],   # abajo-derecha
+                [0.60, 0.30],   # arriba-derecha (convergencia)
+                [0.40, 0.30],   # arriba-izquierda
+            ],
         )
         self.sign_det = SignDetector(
             model_path="weights/tmr_signs.pt",
