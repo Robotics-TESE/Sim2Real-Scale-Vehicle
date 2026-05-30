@@ -203,7 +203,7 @@ class VehicleSimulator:
         self.lane_pipe = LanePipeline(
             frame_w=CAMERA_W, frame_h=CAMERA_H, debug=_DISPLAY,
             right_bias=0.75,
-            roi_frac=0.40,
+            roi_frac=0.30,      # BEV mira más lejos (se ven los 2 carriles)
         )
         self.sign_det = SignDetector(
             model_path="weights/tmr_signs.pt",
