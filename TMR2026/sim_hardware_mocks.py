@@ -69,7 +69,16 @@ class MockMotorDriver:
 
 
 class MockSteeringDriver:
-    """Reemplaza: hardware/steering_driver.py"""
+    """Reemplaza: hardware/steering_driver.py.
+
+    Replica la inversión física del Pi: el servo del carro está montado al
+    revés, y config.STEERING_INVERTED lo compensa. Para que el simulador se
+    comporte IGUAL que el carro real, aplicamos la misma inversión antes de
+    mandar el ángulo a Unity. current_angle sigue siendo el LÓGICO."""
+
+    # 90 = recto. Espejo: physical = 2*90 - angle.
+    STEERING_INVERTED = True
+    SERVO_CENTER = 90.0
 
     def __init__(self, socket_client):
         self.socket = socket_client
@@ -78,15 +87,17 @@ class MockSteeringDriver:
 
     def set_angle(self, angle_deg: float):
         """
-        Envía ángulo del servo al simulador.
-        angle_deg: [0, 180] (90 = centro, <90 = izquierda, >90 = derecha)
+        angle_deg LÓGICO: [0,180] (90=recto, <90=izquierda, >90=derecha).
+        Se envía a Unity el ángulo FÍSICO (invertido) como en el carro real.
         """
         angle_deg = max(0, min(180, angle_deg))
         with self._lock:
-            self.current_angle = angle_deg
+            self.current_angle = angle_deg   # lógico (telemetría)
 
+        physical = (2 * self.SERVO_CENTER - angle_deg
+                    if self.STEERING_INVERTED else angle_deg)
         try:
-            msg = f"SERVO:{angle_deg:.2f}\n".encode()
+            msg = f"SERVO:{physical:.2f}\n".encode()
             self.socket.sendall(msg)
         except Exception as e:
             print(f"[MockSteering] Error enviando ángulo: {e}")

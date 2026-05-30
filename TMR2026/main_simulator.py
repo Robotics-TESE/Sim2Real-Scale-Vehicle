@@ -203,12 +203,12 @@ class VehicleSimulator:
         # águila. (El Pi mantiene sus defaults; esto es solo del simulador.)
         self.lane_pipe = LanePipeline(
             frame_w=CAMERA_W, frame_h=CAMERA_H, debug=_DISPLAY,
-            roi_frac=0.30,
+            roi_frac=0.25,      # toma desde el 25% del alto → ve casi toda la pista
             bev_src_ratio=[
-                [0.18, 1.00],   # abajo-izquierda (línea izq cercana)
-                [0.82, 1.00],   # abajo-derecha
-                [0.60, 0.30],   # arriba-derecha (convergencia)
-                [0.40, 0.30],   # arriba-izquierda
+                [0.15, 1.00],   # abajo-izquierda (línea izq cercana, ancho)
+                [0.85, 1.00],   # abajo-derecha
+                [0.60, 0.32],   # arriba-derecha (convergencia de la pista)
+                [0.40, 0.32],   # arriba-izquierda
             ],
         )
         self.sign_det = SignDetector(
