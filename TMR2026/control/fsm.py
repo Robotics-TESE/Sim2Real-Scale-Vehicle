@@ -270,6 +270,13 @@ class AutonomousFSM:
         Funciona en todos los estados — incluso con el motor parado el
         coche debe apuntar en la dirección correcta.
         """
+        # Con el carro PARADO (FRENADO/ESPERA) el integrador del PID acumula
+        # error (windup) durante los 5 s, y al REANUDAR el servo sale torcido
+        # → el carro se va chueco y se sale del carril. Reseteamos el PID
+        # mientras está parado para que arranque limpio.
+        if self._state in (FSMState.FRENADO, FSMState.ESPERA):
+            self.pid.reset()
+
         if self.lane_conf >= self.MIN_LANE_CONF:
             correction = self.pid.compute(self.lane_error, dt)
         else:
