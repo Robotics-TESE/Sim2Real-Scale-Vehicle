@@ -446,32 +446,35 @@ class VehicleSimulator:
         dets  = self.sign_det.get_detections()
         lidar = self.sensor.front_mm
 
-        # Frame con línea central del carril
+        # Frame con línea central del carril + bounding boxes YOLO
         vis = self.lane_pipe.draw_debug(frame, lane)
-
-        # ── Mosaico BEV + máscara ──
-        if lane.bev_frame is not None and lane.mask_frame is not None:
-            vis[0:180, 0:320]   = cv2.resize(lane.bev_frame,  (320, 180))
-            vis[0:180, 320:640] = cv2.resize(lane.mask_frame, (320, 180))
-            cv2.putText(vis, "BEV", (8, 14),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-            cv2.putText(vis, "HSV Mask", (328, 14),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-
-        # ── Bounding boxes YOLO ──
         for d in dets:
             cv2.rectangle(vis, (d.x1, d.y1), (d.x2, d.y2), (0, 0, 255), 2)
             dist_txt = f" {(d.distance_m or 0)*100:.0f}cm" if d.distance_m else ""
             cv2.putText(vis, f"{d.label} {d.confidence:.0%}{dist_txt}",
                         (d.x1, max(d.y1 - 6, 12)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2, cv2.LINE_AA)
+
+        # ── Canvas GRANDE: el frame de la cámara al doble (1280x960) para ver
+        #    bien la señal de lejos. BEV + máscara como mosaicos arriba. ──
+        BW, BH = 1280, 960
+        big = cv2.resize(vis, (BW, BH), interpolation=cv2.INTER_LINEAR)
+
+        mw, mh = 380, 250   # tamaño de cada mini-vista (BEV / HSV)
+        if lane.bev_frame is not None and lane.mask_frame is not None:
+            big[0:mh, 0:mw]        = cv2.resize(lane.bev_frame,  (mw, mh))
+            big[0:mh, BW - mw:BW]  = cv2.resize(lane.mask_frame, (mw, mh))
+            cv2.putText(big, "BEV (ojo de aguila)", (10, 26),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(big, "Mascara HSV blanco", (BW - mw + 10, 26),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
         angle_target = max(
             SERVO_MIN, min(SERVO_MAX, SERVO_CENTER + self.pid.last_output)
         )
 
-        # ── Panel PID ──
-        self._draw_panel(vis, x=8, y=200, w=320, h=160, lines=[
+        # ── Panel PID (debajo del BEV) ──
+        self._draw_panel(big, x=10, y=mh + 12, w=440, h=210, lines=[
             f"MODO  : {mode_label}",
             f"err   :{lane.error_px:+7.1f}px  conf:{lane.confidence:.0%}",
             f"P     :{self.pid.last_p:+7.2f}   kp={self.pid.kp:.3f}",
@@ -481,23 +484,24 @@ class VehicleSimulator:
             f"lidar :{lidar:.0f}mm" if lidar else "lidar :---",
         ])
 
-        # ── Panel objetos ──
+        # ── Panel objetos (debajo de la máscara) ──
         if dets:
-            obj_lines = ["OBJETOS:"]
+            obj_lines = ["OBJETOS DETECTADOS:"]
             for d in dets[:5]:
                 dist = f" @{(d.distance_m or 0)*100:.0f}cm" if d.distance_m else ""
                 obj_lines.append(f"- {d.label} {d.confidence:.0%}{dist}")
         else:
-            obj_lines = ["OBJETOS:", "- (ninguno)"]
-        self._draw_panel(vis, x=336, y=200, w=296, h=160, lines=obj_lines)
+            obj_lines = ["OBJETOS DETECTADOS:", "- (ninguno)"]
+        self._draw_panel(big, x=BW - mw - 10, y=mh + 12, w=mw, h=210, lines=obj_lines)
 
         try:    fsm_txt = f"FSM:{self.fsm.state.name}"
         except: fsm_txt = ""
-        cv2.putText(vis, f"{mode_label}  {fsm_txt}  duty:{self.motor.current_duty:+.0f}%",
-                    (8, CAMERA_H - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2, cv2.LINE_AA)
+        cv2.putText(big, f"{mode_label}  {fsm_txt}  duty:{self.motor.current_duty:+.0f}%",
+                    (12, BH - 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 220, 255), 2, cv2.LINE_AA)
 
-        cv2.imshow("TMR 2026 - Simulator Debug", vis)
+        cv2.namedWindow("TMR 2026 - Simulator Debug", cv2.WINDOW_NORMAL)
+        cv2.imshow("TMR 2026 - Simulator Debug", big)
         # Teclas en la ventana: A=Autonomo  S=Stop  Q=Salir
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
@@ -512,15 +516,15 @@ class VehicleSimulator:
 
     @staticmethod
     def _draw_panel(img, x: int, y: int, w: int, h: int, lines: list[str]) -> None:
-        """Caja de debug con texto."""
+        """Caja de debug con texto (legible en ventana grande)."""
         ov = img.copy()
         cv2.rectangle(ov, (x, y), (x + w, y + h), (0, 0, 0), -1)
         cv2.addWeighted(ov, 0.55, img, 0.45, 0, dst=img)
-        cv2.rectangle(img, (x, y), (x + w, y + h), (255, 220, 0), 1)
+        cv2.rectangle(img, (x, y), (x + w, y + h), (255, 220, 0), 2)
         for i, line in enumerate(lines):
-            cv2.putText(img, line, (x + 8, y + 20 + i * 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        (255, 220, 0), 1, cv2.LINE_AA)
+            cv2.putText(img, line, (x + 12, y + 30 + i * 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65,
+                        (255, 220, 0), 2, cv2.LINE_AA)
 
     # ─── Métodos de control programático ───────────────────────────────────
 
