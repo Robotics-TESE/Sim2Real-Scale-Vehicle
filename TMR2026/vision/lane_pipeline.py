@@ -22,6 +22,7 @@ Nota de rendimiento:
 
 from __future__ import annotations
 
+import time
 import cv2
 import numpy as np
 from dataclasses import dataclass
@@ -158,6 +159,13 @@ class LanePipeline:
         self._smooth_error = 0.0
         self._prev_conf    = 0.0
 
+        # Persistencia temporal (idea: mantener la ruta cuando la línea
+        # punteada desaparece en los huecos, para no hacer giros falsos).
+        self._last_good_error = 0.0
+        self._last_good_time  = 0.0
+        self.LANE_HOLD_S      = 1.0     # mantener la última ruta hasta 1 s
+        self.MAX_ERR_JUMP_PX  = 90.0    # rechazar saltos bruscos del error
+
         # Kernel morfológico para limpiar ruido
         self._morph_k = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
 
@@ -193,8 +201,35 @@ class LanePipeline:
         # 5. Sliding Windows
         result = self._sliding_windows(mask)
 
-        # 6. Suavizado temporal (EMA)
-        if result.confidence > 0.1:
+        # 6. Suavizado + PERSISTENCIA temporal (anti giros falsos)
+        now = time.monotonic()
+        CONF_OK = 0.9   # detección sólida (2 líneas) → confiar y memorizar
+
+        if result.confidence >= CONF_OK:
+            # Rechazar SALTOS bruscos del error (cambio de línea de referencia):
+            # si salta más de MAX_ERR_JUMP_PX respecto a la ruta memorizada y
+            # aún estamos dentro del hold, ignorar este frame.
+            jump = abs(result.error_px - self._last_good_error)
+            if (jump > self.MAX_ERR_JUMP_PX
+                    and (now - self._last_good_time) <= self.LANE_HOLD_S):
+                result.error_px = self._last_good_error
+            else:
+                smoothed = (self.EMA_ALPHA * result.error_px
+                            + (1 - self.EMA_ALPHA) * self._smooth_error)
+                self._smooth_error    = smoothed
+                result.error_px       = smoothed
+                self._last_good_error = smoothed
+                self._last_good_time  = now
+
+        elif (now - self._last_good_time) <= self.LANE_HOLD_S:
+            # Hueco de la línea punteada: MANTENER la última ruta buena ~1 s,
+            # para no tomar de referencia la otra línea y girar raro.
+            result.error_px  = self._last_good_error
+            result.confidence = max(result.confidence, CONF_OK)
+            self._smooth_error = self._last_good_error
+
+        elif result.confidence > 0.1:
+            # Perdido más de 1 s: EMA normal (suave) sin memoria.
             smoothed = (self.EMA_ALPHA * result.error_px
                         + (1 - self.EMA_ALPHA) * self._smooth_error)
             self._smooth_error = smoothed
