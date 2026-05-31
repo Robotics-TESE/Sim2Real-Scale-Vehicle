@@ -29,7 +29,13 @@ except ImportError:
     print("Falta matplotlib. Instala con:  pip install matplotlib")
     sys.exit(1)
 
+import sys as _sys
+# Carpeta de resultados: por defecto validation_results, o la que se pase como
+# argumento (p.ej. validation_results_parking para el escenario de parking).
 DIR = "validation_results"
+for _a in _sys.argv[1:]:
+    if _a.startswith("validation_results"):
+        DIR = _a
 
 
 def _read(name):

@@ -249,8 +249,11 @@ class VehicleSimulator:
         self._start_time      = time.monotonic()
         self._sign_action     = ""   # texto de acción de la señal detectada
 
-        # Logger de validación (PDF): CSV de las 3 pruebas + puntos
-        self.vlog = ValidationLogger() if _VALIDATE else None
+        # Logger de validación (PDF): CSV de las 3 pruebas + puntos.
+        # El escenario de estacionamiento guarda en carpeta separada para no
+        # sobrescribir los datos del escenario normal (latencia + STOP).
+        _vdir = "validation_results_parking" if _PARKING else "validation_results"
+        self.vlog = ValidationLogger(_vdir) if _VALIDATE else None
 
         # ── Metrics para Phase 1 validation ────────────────────────────────
         self._metrics = {

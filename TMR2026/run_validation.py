@@ -67,9 +67,10 @@ def main():
         print("    (el carro maneja, detecta el STOP, frena y reanuda)\n")
     subprocess.run(cmd, cwd=here)
 
-    # 2) Generar gráficas del artículo
+    # 2) Generar gráficas del artículo (de la carpeta correcta)
     print("\n>>> Generando gráficas del artículo...")
-    subprocess.run([sys.executable, os.path.join(here, "analyze_results.py")],
+    vdir = "validation_results_parking" if parking else "validation_results"
+    subprocess.run([sys.executable, os.path.join(here, "analyze_results.py"), vdir],
                    cwd=here)
 
     print("\n" + "=" * 60)
