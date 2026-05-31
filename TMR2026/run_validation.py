@@ -33,8 +33,10 @@ def unity_listening(host="127.0.0.1", port=PORT, timeout=1.5) -> bool:
 
 
 def main():
-    parking = "parking" in sys.argv
-    dur = 25 if parking else DURATION
+    # Una sola corrida hace TODO en secuencia: maneja → STOP → espera →
+    # reanuda → sigue → estaciona en batería. Duración amplia para que dé
+    # tiempo a completar el estacionamiento.
+    dur = 40
     for a in sys.argv[1:]:
         try: dur = int(a)
         except ValueError: pass
@@ -55,23 +57,18 @@ def main():
 
     here = os.path.dirname(os.path.abspath(__file__))
 
-    # 1) Correr el control con logging de validación
+    # 1) Correr el control con logging de validación (secuencia completa)
     cmd = [sys.executable, os.path.join(here, "main_simulator.py"),
-           "--validate", "--duration", str(dur)]
-    if parking:
-        cmd.append("--parking")
-        print(f">>> Ejecutando con ESTACIONAMIENTO durante {dur} s...")
-        print("    (maneja, luego PARKING_SEARCH→PARKING_MANEUVER→PARKED)\n")
-    else:
-        print(f">>> Ejecutando las 3 pruebas durante {dur} s...")
-        print("    (el carro maneja, detecta el STOP, frena y reanuda)\n")
+           "--validate", "--duration", str(dur), "--parking"]
+    print(f">>> Ejecutando la SECUENCIA COMPLETA durante {dur} s...")
+    print("    maneja → STOP (frena+espera 5s+reanuda) → sigue → ESTACIONA")
+    print("    (cubre las 3 pruebas del PDF en una sola corrida)\n")
     subprocess.run(cmd, cwd=here)
 
-    # 2) Generar gráficas del artículo (de la carpeta correcta)
+    # 2) Generar gráficas del artículo
     print("\n>>> Generando gráficas del artículo...")
-    vdir = "validation_results_parking" if parking else "validation_results"
-    subprocess.run([sys.executable, os.path.join(here, "analyze_results.py"), vdir],
-                   cwd=here)
+    subprocess.run([sys.executable, os.path.join(here, "analyze_results.py"),
+                    "validation_results"], cwd=here)
 
     print("\n" + "=" * 60)
     print("  VALIDACIÓN COMPLETA")

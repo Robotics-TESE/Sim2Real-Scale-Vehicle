@@ -52,8 +52,9 @@ def main():
     os.makedirs(DEST, exist_ok=True)
 
     print(">>> Copiando resultados...")
-    copy_into("validation_results",         "01_pruebas_latencia_stop_fsm")
-    copy_into("validation_results_parking", "02_prueba_estacionamiento")
+    # Una sola corrida contiene las 3 pruebas (latencia + STOP + FSM con
+    # ciclo del STOP y estacionamiento en batería).
+    copy_into("validation_results", "01_resultados_3_pruebas")
 
     print(">>> Copiando documentos...")
     docs = os.path.join(DEST, "03_documentos")

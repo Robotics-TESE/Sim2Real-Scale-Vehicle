@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
-__pycache__/ __pycache__/
-__pycache__/
-*.pyc
+
+# Resultados de validación Sim2Real (se regeneran en cada corrida con Unity).
+# No se versionan: contienen datos de la última ejecución local.
+TMR2026/validation_results/
+TMR2026/validation_results_parking/

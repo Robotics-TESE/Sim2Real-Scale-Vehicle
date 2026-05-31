@@ -150,16 +150,23 @@ class ValidationLogger:
                   if r["fsm_state"] in ("FRENADO", "ESPERA")
                   and isinstance(r["distance_mm"], (int, float))]
         if parado:
-            dist_final = parado[-1]["distance_mm"]
+            # Distancia a la que QUEDÓ DETENIDO: se toma de las lecturas con la
+            # señal visible (< 1000 mm), no las del ToF cuando la señal ya no
+            # se ve (≈2000 mm). Se usa la mediana para robustez ante el ruido.
+            parado_vis = [r["distance_mm"] for r in parado
+                          if r["distance_mm"] < 1000]
+            if parado_vis:
+                s = sorted(parado_vis)
+                dist_final = s[len(s) // 2]      # mediana
+            else:
+                dist_final = parado[-1]["distance_mm"]
             err_dist = abs(dist_final - self.STOP_TARGET_MM)
             dentro = err_dist <= self.STOP_TOLERANCE_MM
-            # ¿sobreimpulso REAL? Solo se miran las distancias DURANTE el
-            # frenado (PRECAUCION/FRENADO/ESPERA); así se ignoran detecciones
-            # espurias de la cámara en CRUCERO (p.ej. un blob rojo lejano que
-            # reporta 6 cm) que no son parte de la maniobra de frenado.
+            # ¿sobreimpulso REAL? Solo distancias del frenado con señal visible.
             dists = [r["distance_mm"] for r in self.stop_rows
                      if r["fsm_state"] in ("PRECAUCION", "FRENADO", "ESPERA")
-                     and isinstance(r["distance_mm"], (int, float))]
+                     and isinstance(r["distance_mm"], (int, float))
+                     and r["distance_mm"] < 1000]
             min_d = min(dists) if dists else dist_final
             sobreimpulso = min_d < (self.STOP_TARGET_MM - 2.5 * self.STOP_TOLERANCE_MM)
             if dentro and not sobreimpulso:

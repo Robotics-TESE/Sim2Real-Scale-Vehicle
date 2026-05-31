@@ -48,7 +48,12 @@ _VALIDATE = "--validate" in sys.argv
 #   --parking → fuerza el escenario de estacionamiento (Prueba 3 del PDF):
 #   maneja un rato y luego ejecuta PARKING_SEARCH→PARKING_MANEUVER→PARKED.
 _PARKING = "--parking" in sys.argv
-_PARK_TRIGGER_S = 5.0   # segundos manejando antes de iniciar el estacionamiento
+# Tras COMPLETAR el ciclo del STOP, el carro sigue manejando este tiempo y
+# luego inicia el estacionamiento. Así una sola corrida hace TODO en secuencia:
+# maneja → STOP → espera → reanuda → sigue → PARKING_SEARCH → ... → PARKED.
+_PARK_AFTER_STOP_S = 6.0
+# Respaldo: si nunca detecta el STOP, estaciona de todos modos a los N s.
+_PARK_FALLBACK_S = 22.0
 if _DISPLAY:
     os.environ.setdefault("DISPLAY", ":0")
 
@@ -250,10 +255,13 @@ class VehicleSimulator:
         self._sign_action     = ""   # texto de acción de la señal detectada
 
         # Logger de validación (PDF): CSV de las 3 pruebas + puntos.
-        # El escenario de estacionamiento guarda en carpeta separada para no
-        # sobrescribir los datos del escenario normal (latencia + STOP).
-        _vdir = "validation_results_parking" if _PARKING else "validation_results"
-        self.vlog = ValidationLogger(_vdir) if _VALIDATE else None
+        # Con --parking la corrida hace TODO en secuencia (STOP + parking),
+        # así que un solo set de CSV contiene las 3 pruebas completas.
+        self.vlog = ValidationLogger("validation_results") if _VALIDATE else None
+
+        # Estado de la secuencia STOP→parking
+        self._stop_seen   = False   # el carro llegó a ESPERA (paró en el STOP)
+        self._stop_done_t = 0.0     # cuándo terminó el STOP (volvió a CRUCERO)
 
         # ── Metrics para Phase 1 validation ────────────────────────────────
         self._metrics = {
@@ -323,13 +331,24 @@ class VehicleSimulator:
                     self._running = False
                     break
 
-                # Trigger del estacionamiento (Prueba 3): tras manejar un rato
-                # en AUTONOMOUS, forzar el escenario de parking en batería.
-                if (_PARKING and self._mode == self.Mode.AUTONOMOUS
-                        and (now - t_run0) >= _PARK_TRIGGER_S):
-                    self.fsm.deactivate()
-                    self._mode = self.Mode.PARKING
-                    self.parking.activate()
+                # Secuencia STOP → estacionamiento (todo en una corrida).
+                if _PARKING and self._mode == self.Mode.AUTONOMOUS:
+                    # 1) marcar cuando el carro PARÓ en el STOP (estado ESPERA)
+                    if self.fsm.state == FSMState.ESPERA:
+                        self._stop_seen = True
+                    # 2) marcar cuando TERMINÓ el STOP (volvió a CRUCERO)
+                    if (self._stop_seen and self._stop_done_t == 0.0
+                            and self.fsm.state == FSMState.CRUCERO):
+                        self._stop_done_t = now
+                    # 3) activar parking: tras completar el STOP + avanzar un
+                    #    poco, o por respaldo si nunca vio el STOP.
+                    listo_tras_stop = (self._stop_done_t > 0.0
+                                       and (now - self._stop_done_t) >= _PARK_AFTER_STOP_S)
+                    respaldo = (now - t_run0) >= _PARK_FALLBACK_S
+                    if listo_tras_stop or respaldo:
+                        self.fsm.deactivate()
+                        self._mode = self.Mode.PARKING
+                        self.parking.activate()
 
                 # Latencia percepción→actuación: tiempo del ciclo visión+control
                 cycle_t0 = time.monotonic()
