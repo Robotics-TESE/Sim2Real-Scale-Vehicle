@@ -74,7 +74,7 @@ pip install -r requirements.txt        # opencv, numpy, matplotlib, ultralytics
    A single run executes the full sequence against the simulation: drive → detect STOP → brake →
    wait 5 s → resume → drive forward → park in battery. It covers the **3 PDF tests** (P1 latency,
    P2 PID braking at STOP, P3 FSM transitions including the STOP cycle and the parking) and produces
-   the CSV files, the scoreboard (`PUNTAJE.txt` / English `SCOREBOARD.txt`) and the figures (PNG).
+   the CSV files, the scoreboard (`SCOREBOARD.txt`) and the figures (PNG), all in English.
 
 ### Live view only (no data saved)
 ```bash
@@ -85,20 +85,20 @@ python main_simulator.py --display     # debug window with camera + BEV
 
 ## 4. What to hand in to the professor
 
-Folder `validation_results/` (created when you run the validation):
+Run `python armar_entrega.py` to build **`DELIVERY_TMR2026.zip`** (English only) in your
+`Documents` folder:
 ```
-validation_results/
-├── P1_latencia.csv         ← Test 1 data (latency)
-├── P2_pid_stop.csv         ← Test 2 data (PID braking)
-├── P3_fsm.csv              ← Test 3 data (FSM transitions)
-├── fig1_latency_en.png     ← latency figure (English)
-├── fig2_braking_en.png     ← PID braking figure (English)
-├── fig3_fsm_en.png         ← FSM timeline figure (English)
-├── fig1_latencia.png  ·  fig2_frenado.png  ·  fig3_fsm.png   (Spanish)
-├── SCOREBOARD.txt          ← scoreboard (English)
-└── PUNTAJE.txt             ← scoreboard (Spanish)
+DELIVERY_TMR2026.zip
+├── 01_results_3_tests/
+│   ├── P1_latency.csv · P2_pid_stop.csv · P3_fsm.csv      ← data
+│   ├── fig1_latency.png · fig2_braking.png · fig3_fsm.png ← figures
+│   └── SCOREBOARD.txt                                     ← scoreboard (100/100)
+├── 02_documents/
+│   ├── DELIVERY_PROFESSOR.md   ← this document
+│   └── CALIBRATION_SIM.md      ← simulator calibration
+└── README.txt
 ```
-Plus the **source code** (GitHub repos `Carrito` and `TMR2026_Sim`) and this document.
+Plus the **source code** (GitHub repos `Carrito` and `TMR2026_Sim`).
 
 ---
 

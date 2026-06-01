@@ -75,9 +75,10 @@ def main():
     print("=" * 60)
     print("  Resultados en la carpeta:  validation_results/")
     print("    • P1_latencia.csv  P2_pid_stop.csv  P3_fsm.csv   (datos)")
-    print("    • fig1_latencia.png  fig2_frenado.png  fig3_fsm.png (gráficas)")
-    print("    • PUNTAJE.txt        (tablero de puntos)")
-    print("\n  Entrega al profesor: ver ENTREGA_PROFESOR.md")
+    print("    • fig1_latency.png  fig2_braking.png  fig3_fsm.png (figuras EN)")
+    print("    • SCOREBOARD.txt     (tablero de puntos, inglés)")
+    print("\n  Arma la entrega en inglés:  python armar_entrega.py")
+    print("  (mapa de requisitos: DELIVERY_PROFESSOR.md)")
 
 
 if __name__ == "__main__":

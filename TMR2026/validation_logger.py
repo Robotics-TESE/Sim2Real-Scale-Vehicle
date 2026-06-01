@@ -251,15 +251,11 @@ class ValidationLogger:
         return "\n".join(lines)
 
     def print_scoreboard(self) -> dict:
-        """Imprime el tablero (ES) y guarda PUNTAJE.txt (ES) + SCOREBOARD.txt (EN)."""
+        """Entrega en INGLÉS: imprime el tablero y guarda SCOREBOARD.txt."""
         res = self.evaluate()
-        txt_es = self._board_text(res, "es")
-        print(txt_es)
-        with open(os.path.join(self.outdir, "PUNTAJE.txt"), "w",
-                  encoding="utf-8") as f:
-            f.write(txt_es + "\n")
-        # Tablero en inglés para la entrega internacional (no se imprime en consola).
+        txt = self._board_text(res, "en")
+        print(txt)
         with open(os.path.join(self.outdir, "SCOREBOARD.txt"), "w",
                   encoding="utf-8") as f:
-            f.write(self._board_text(res, "en") + "\n")
+            f.write(txt + "\n")
         return res

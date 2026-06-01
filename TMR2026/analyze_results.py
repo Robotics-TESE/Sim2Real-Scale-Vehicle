@@ -74,7 +74,7 @@ def fig_latencia(lang="es"):
     plt.title("Test 1: Control-loop latency" if en
               else "Prueba 1: Latencia del ciclo de control")
     plt.legend(); plt.grid(alpha=0.3); plt.tight_layout()
-    out = os.path.join(DIR, "fig1_latency_en.png" if en else "fig1_latencia.png")
+    out = os.path.join(DIR, "fig1_latency.png" if en else "fig1_latencia.png")
     plt.savefig(out, dpi=130); plt.close()
     print(f"  ✓ {out}  (avg {avg:.1f} ms)")
 
@@ -112,7 +112,7 @@ def fig_frenado(lang="es"):
     l2, lab2 = ax2.get_legend_handles_labels()
     ax1.legend(l1 + l2, lab1 + lab2, loc="upper right")
     plt.tight_layout()
-    out = os.path.join(DIR, "fig2_braking_en.png" if en else "fig2_frenado.png")
+    out = os.path.join(DIR, "fig2_braking.png" if en else "fig2_frenado.png")
     plt.savefig(out, dpi=130); plt.close()
     print(f"  ✓ {out}")
 
@@ -147,7 +147,7 @@ def fig_fsm(lang="es"):
     plt.title("Test 3: State Machine timeline" if en
               else "Prueba 3: Línea de tiempo de la Máquina de Estados")
     plt.grid(alpha=0.3, axis="x"); plt.tight_layout()
-    out = os.path.join(DIR, "fig3_fsm_en.png" if en else "fig3_fsm.png")
+    out = os.path.join(DIR, "fig3_fsm.png" if en else "fig3_fsm_es.png")
     plt.savefig(out, dpi=130); plt.close()
     print(f"  ✓ {out}")
 
@@ -158,9 +158,9 @@ if __name__ == "__main__":
         print(f"No existe la carpeta '{DIR}'. Corre primero:")
         print("   python main_simulator.py --validate --duration 60")
         sys.exit(1)
-    # Genera las 3 figuras en español (artículo) y en inglés (_en, para el profe).
-    for _lang in ("es", "en"):
-        fig_latencia(_lang)
-        fig_frenado(_lang)
-        fig_fsm(_lang)
-    print("Listo. 3 figuras ES + 3 figuras EN (_en) en validation_results/.")
+    # Entrega en INGLÉS (el profesor ya tiene la versión en español).
+    fig_latencia("en")
+    fig_frenado("en")
+    fig_fsm("en")
+    print("Done. 3 English figures in validation_results/ "
+          "(fig1_latency, fig2_braking, fig3_fsm).")
