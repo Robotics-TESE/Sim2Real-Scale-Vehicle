@@ -3,10 +3,10 @@
 analyze_results.py — Genera las GRÁFICAS del artículo científico a partir de
 los 3 CSV de validation_results/ (creados por main_simulator.py --validate).
 
-Salida (PNG en validation_results/):
-  - fig1_latencia.png    Latencia del ciclo de control vs tiempo (Prueba 1)
-  - fig2_frenado.png     Distancia ToF y PWM vs tiempo — frenado PID (Prueba 2)
-  - fig3_fsm.png         Línea de tiempo de estados de la FSM (Prueba 3)
+Salida en INGLÉS (PNG en validation_results/, el profe ya tiene el español):
+  - fig1_latency.png     Control-loop latency vs time (Test 1)
+  - fig2_braking.png     ToF distance and PWM vs time — PID braking (Test 2)
+  - fig3_fsm.png         FSM state timeline (Test 3)
 
 Uso:
     python analyze_results.py
