@@ -1,432 +1,512 @@
-# 🏎 Carrito Autónomo — TMR 2026
+<div align="center">
 
-> Vehículo autónomo a escala 1:10 desarrollado para el **Torneo Mexicano de Robótica 2026**.
-> Basado en Raspberry Pi 5 con cámara AI (Sony IMX500), detección NPU on-chip, control PID y
-> máquina de estados para seguimiento de carril, señales de tráfico, cruceros y estacionamiento
-> en batería.
+# 🏎️ Carrito Autónomo — TMR 2026
 
-[![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)](https://python.org)
-[![Platform](https://img.shields.io/badge/Platform-Raspberry%20Pi%205%2016GB-red?logo=raspberrypi)](https://raspberrypi.com)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![TMR](https://img.shields.io/badge/Competencia-TMR%202026-orange)](https://tmr.org.mx)
+**Vehículo autónomo a escala 1:10 para el Torneo Mexicano de Robótica 2026.**
+Seguimiento de carril por visión, frenado ante señal de **ALTO**, máquina de estados de conducción
+y **estacionamiento en batería** — sobre Raspberry Pi 5 con cámara Sony IMX500.
+
+Validado con un **gemelo digital en Unity** (Sim2Real) antes de tocar el hardware.
+
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://python.org)
+[![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi%205-16GB-A22846?logo=raspberrypi&logoColor=white)](https://raspberrypi.com)
+[![OpenCV](https://img.shields.io/badge/OpenCV-Visión-5C3EE8?logo=opencv&logoColor=white)](https://opencv.org)
+[![YOLOv8](https://img.shields.io/badge/YOLOv8-Señales-00FFFF)](https://ultralytics.com)
+[![Unity](https://img.shields.io/badge/Unity-Sim2Real-000000?logo=unity&logoColor=white)](https://github.com/Empanaditasesina72/TMR2026_Sim-2026-05-24_20-19-01)
+[![Sim2Real](https://img.shields.io/badge/Validación-100%2F100-brightgreen)](#-validación-sim2real-gemelo-digital)
+
+</div>
 
 ---
 
-## Diagrama de Bloques del Sistema
+## 📑 Tabla de contenido
+
+- [¿Qué es?](#-qué-es)
+- [Validación Sim2Real (gemelo digital)](#-validación-sim2real-gemelo-digital)
+- [Arquitectura del sistema](#-arquitectura-del-sistema)
+- [Máquina de estados](#-máquina-de-estados)
+- [Diagrama de clases (UML)](#-diagrama-de-clases-uml)
+- [Pipeline de visión](#-pipeline-de-visión)
+- [Hardware y pinout](#-hardware-y-pinout)
+- [Estructura del repositorio](#-estructura-del-repositorio)
+- [Instalación (Raspberry Pi)](#-instalación-raspberry-pi)
+- [Ejecución](#-ejecución)
+- [Controles del mando](#-controles-del-mando)
+- [Parámetros clave](#-parámetros-clave-configpy)
+- [Concurrencia (hilos)](#-concurrencia-hilos)
+- [Checklist de competencia](#-checklist-de-competencia)
+- [Créditos](#-créditos)
+
+---
+
+## 🎯 ¿Qué es?
+
+Un auto a escala que se conduce **solo** sobre una pista TMR: detecta el carril con la cámara,
+mantiene la trayectoria con un control **PID**, se detiene ante la señal de **ALTO** a la distancia
+reglamentaria, espera, reanuda, y al final ejecuta un **estacionamiento en batería**.
+
+Todo el cerebro corre en una **Raspberry Pi 5**. El mismo código de control se valida primero
+contra un **gemelo digital en Unity** (sin riesgo de chocar el hardware) y luego se despliega en el
+carro físico — eso es **Sim2Real**.
+
+| Capacidad | Estado | Módulo |
+|---|---|---|
+| Seguimiento de carril (PID) | ✅ Producción | `vision/lane_pipeline.py` + `control/pid_controller.py` |
+| Detección de señal ALTO (YOLO) | ✅ Producción | `vision/sign_detector.py` |
+| FSM de conducción (5 estados) | ✅ Producción | `control/fsm.py` |
+| Estacionamiento en batería | ✅ Producción | `control/parking_fsm.py` |
+| Señales direccionales + freno | ✅ Producción | `hardware/signals.py`, `hardware/brake_light.py` |
+| Gemelo digital Unity (Sim2Real) | ✅ Validado 100/100 | `main_simulator.py` + repo [TMR2026_Sim](https://github.com/Empanaditasesina72/TMR2026_Sim-2026-05-24_20-19-01) |
+| Rebase / cruce peatonal / NPU on-chip | 🧪 Disponible (no integrado) | `autonomy/`, `hardware/camera_manager.py` |
+
+---
+
+## 🏆 Validación Sim2Real (gemelo digital)
+
+Antes de arriesgar el carro físico, el código de control (`TMR2026/`) se conecta por **TCP** a una
+réplica 3D en **Unity**. La PC envía comandos de motor/servo y Unity devuelve sensores (ToF) e
+imágenes (JPEG), exactamente como lo haría el hardware real.
+
+```mermaid
+sequenceDiagram
+    participant PC as 💻 PC — código TMR2026
+    participant U as 🎮 Unity — gemelo digital
+    PC->>U: conexión TCP 127.0.0.1:5005
+    U-->>PC: ResetPose (carro al inicio)
+    loop cada ciclo
+        U-->>PC: TOF:front,rear  (50 Hz)
+        U-->>PC: [4B tamaño] + JPEG  (30 FPS)
+        PC->>PC: visión → FSM → PID
+        PC->>U: MOTOR:duty
+        PC->>U: SERVO:angle
+    end
+```
+
+**Una sola corrida** ejecuta la secuencia completa y valida las 3 pruebas del protocolo:
+maneja → detecta ALTO → frena → espera 5 s → reanuda → avanza → **se estaciona**.
+
+| Prueba | Criterio | Resultado |
+|---|---|---|
+| **P1 — Latencia** del ciclo percepción→actuación | media < 200 ms | **30/30** · ~9 ms |
+| **P2 — Frenado PID** ante ALTO | parar a 270 ± 30 mm sin sobreimpulso | **40/40** · 292 mm |
+| **P3 — Transiciones FSM** sin bloqueo | ciclo ALTO 5/5 + parking 3/3 | **30/30** |
+| | | **🟢 100/100 — APROBADO** |
+
+> El runner `run_validation.py` genera los CSV, las gráficas (`matplotlib`) y un tablero de puntos
+> `PUNTAJE.txt`. Ver detalles en [`TMR2026/ENTREGA_PROFESOR.md`](TMR2026/ENTREGA_PROFESOR.md).
+
+---
+
+## 🧩 Arquitectura del sistema
+
+El bucle principal corre a **50 Hz**. La percepción y los drivers viven en hilos *daemon* para no
+bloquear el control.
 
 ```mermaid
 graph TD
-    %% ─── ENTRADAS ──────────────────────────────────────────────────────
-    subgraph INPUTS["  ENTRADAS"]
-        direction LR
-        CAM("📷 Pi AI Camera\nSony IMX500\n640×480 @ 30 fps")
-        TOF("📡 VL53L0X ×2\nFrontal · Trasero\n50 Hz · hasta 1.2 m")
-        PAD("🎮 Gamepad Bluetooth\nPS4 / Xbox\n100 Hz")
+    subgraph SENS["🔌 Sensores"]
+        CAM["📷 Pi AI Camera<br/>IMX500 · 640×480 @30fps"]
+        TOF["📡 VL53L0X ×2<br/>ToF frontal/trasero · 50 Hz"]
+        PAD["🎮 Gamepad BT<br/>PS4 / Xbox"]
     end
 
-    %% ─── PERCEPCIÓN ────────────────────────────────────────────────────
-    subgraph PERCEP["  PERCEPCIÓN  hilo cámara daemon"]
-        direction TB
-        NPU("⚡ NPU IMX500\nEfficientDet Lite0\nSTOP · Semáforo · Auto · Persona")
-        LD("Lane Detector\nOpenCV — Umbral + Histograma\nerror_px · curvatura · crucero")
-        OD("Object Detector\nFiltro temporal · Clasificación HSV\ncar_in_lane · stop_dist_mm")
+    subgraph PERC["👁️ Percepción"]
+        LP["LanePipeline<br/>BEV + HSV blanco<br/>sliding windows + EMA"]
+        SD["SignDetector<br/>YOLOv8n (CPU)<br/>tmr_signs.pt"]
     end
 
-    %% ─── DRIVERS DE HARDWARE ───────────────────────────────────────────
-    subgraph HDRVS["  DRIVERS  hilos daemon"]
-        direction LR
-        DS("Distance Sensor\n2× VL53L0X\nfront_mm · rear_mm")
-        GR("Gamepad Reader\nthrottle · steer\nbtn_manual/auto/park")
+    subgraph DEC["🧠 Decisión — bucle 50 Hz"]
+        MODE["Modos<br/>STANDBY · MANUAL<br/>VISION · AUTONOMOUS"]
+        FSM["AutonomousFSM<br/>CRUCERO→PRECAUCION→<br/>FRENADO→ESPERA→REANUDAR"]
+        PID["PID Dirección<br/>error_px → ángulo servo"]
+        PARK["ParkingFSM<br/>SEARCH→MANEUVER→PARKED"]
     end
 
-    %% ─── DECISIÓN / CONTROL ────────────────────────────────────────────
-    subgraph CTRL["  CONTROL  bucle principal 50 Hz"]
-        direction TB
-
-        subgraph MODES["Modos de operación"]
-            M1("STANDBY\nEsperando mando")
-            M2("MANUAL\nControl directo")
-            M3("VISION\nDebug cámara")
-            M4("AUTONOMOUS\nControl IA")
-        end
-
-        subgraph FSM["Máquina de estados autónoma"]
-            S1("LANE_FOLLOWING\nSeguimiento de carril")
-            S2("APPROACHING_STOP\nFrenado PID progresivo")
-            S3("STOPPED_WAIT\n5 s parada + LED blink")
-            S4("RESUMING\nRampa de aceleración")
-            S5("CROSSWALK_STOP\n3 s crucero peatonal")
-            S6("OBSTACLE_HOLD\nEmergencia ToF")
-            S7("OVERTAKING_LEFT\nRebase — girar izq")
-            S8("OVERTAKING_PASS\nRebase — pasar")
-            S9("OVERTAKING_RETURN\nRebase — regresar")
-            S10("PARKING\nEstac. en batería")
-        end
-
-        PID_S("PID Dirección\nKp 0.09 · Ki 0.002 · Kd 0.025\nSetpoint → error_px = 0")
-        PID_V("PID Velocidad STOP\nKp 0.035 · Ki 0.001 · Kd 0.008\nSetpoint → dist = 270 mm")
-        PARK_FSM("ParkingManeuver\nSEARCHING → POSITIONING\n→ REVERSING_LOCK → PARKED")
+    subgraph ACT["⚙️ Actuadores"]
+        MOT["MotorDriver<br/>IBT-2 · soft-start 50 Hz"]
+        SRV["SteeringDriver<br/>PCA9685 · Ackermann"]
+        LED["Señales + Freno<br/>direccionales 2 Hz"]
     end
 
-    %% ─── ACTUADORES ────────────────────────────────────────────────────
-    subgraph ACTUA["  ACTUADORES"]
-        direction LR
-        IBT("IBT-2 H-Bridge\nRPWM GPIO 18 · LPWM GPIO 13\n1 kHz · Slew Rate 3 %/tick")
-        PCA("PCA9685\nI²C Bus 3 — 50 Hz\nCanal 15")
-        MOTOR("⚙ Motor DC\nTracción trasera")
-        SERVO("🔩 Servo MG90s\nDirección delantera\n58°–122°")
-        LEDS("💡 LEDs Estado\nGPIO 25 Stop · GPIO 26 Status")
-    end
-
-    %% ─── CONEXIONES ────────────────────────────────────────────────────
-    CAM  --> NPU
-    CAM  --> LD
-    NPU  --> OD
-    TOF  --> DS
-    PAD  --> GR
-
-    LD   --> FSM
-    OD   --> FSM
-    DS   --> FSM
-    GR   --> MODES
-
-    MODES --> FSM
-    FSM   --> PID_S
-    FSM   --> PID_V
-    FSM   --> PARK_FSM
-
-    PID_S    --> PCA
-    PID_V    --> IBT
-    PARK_FSM --> IBT
-    PARK_FSM --> PCA
-    FSM      --> LEDS
-
-    PCA  --> SERVO
-    IBT  --> MOTOR
+    CAM --> LP
+    CAM --> SD
+    TOF --> FSM
+    PAD --> MODE
+    LP --> PID
+    SD --> FSM
+    MODE --> FSM
+    FSM --> PID
+    FSM --> PARK
+    PID --> SRV
+    FSM --> MOT
+    PARK --> MOT
+    PARK --> SRV
+    FSM --> LED
 ```
 
 ---
 
-## Diagrama de Estados Autónomos
+## 🔁 Máquina de estados
+
+### Ciclo de conducción (`control/fsm.py`)
+
+5 estados en español. La espera del ALTO usa `time.monotonic()` (**nunca** `sleep()`), así el hilo
+de visión nunca se congela.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> LANE_FOLLOWING : activate()
+    [*] --> CRUCERO : activate()
+    CRUCERO --> PRECAUCION : ALTO visible (cooldown ok)
+    PRECAUCION --> CRUCERO : la señal desaparece
+    PRECAUCION --> FRENADO : dist ≤ 300 mm (cámara o ToF)
+    FRENADO --> ESPERA : motor = 0 (freno duro)
+    ESPERA --> REANUDAR : espera 5 s cumplida
+    REANUDAR --> CRUCERO : rampa soft-start completa
+```
 
-    LANE_FOLLOWING    --> APPROACHING_STOP  : STOP detectado < 700 mm
-    LANE_FOLLOWING    --> CROSSWALK_STOP    : crucero peatonal detectado
-    LANE_FOLLOWING    --> OBSTACLE_HOLD     : ToF frontal < 120 mm
-    LANE_FOLLOWING    --> OVERTAKING_LEFT   : auto en carril (bbox grande)
-    LANE_FOLLOWING    --> PARKING           : trigger_parking()
+| Estado | Qué hace | Luces |
+|---|---|---|
+| **CRUCERO** | Sigue el carril con PID | Direccional según ángulo |
+| **PRECAUCION** | Detectó ALTO, reduce velocidad | Intermitentes (hazard) |
+| **FRENADO** | `motor.brake()` — corte duro a 0 | Hazard + freno |
+| **ESPERA** | Parado 5 s (regla TMR) | Hazard + freno |
+| **REANUDAR** | Rampa de aceleración + cooldown 3 s | Direccional |
 
-    APPROACHING_STOP  --> STOPPED_WAIT      : dist ≤ 270 mm ± 30
-    APPROACHING_STOP  --> OBSTACLE_HOLD     : ToF < 120 mm
+### Estacionamiento en batería (`control/parking_fsm.py`)
 
-    STOPPED_WAIT      --> RESUMING          : espera 5 s completa
+```mermaid
+stateDiagram-v2
+    [*] --> PARKING_SEARCH : activate()
+    PARKING_SEARCH --> PARKING_MANEUVER : hueco detectado (ToF) o timeout
+    PARKING_MANEUVER --> PARKED : giro derecha + enderezado
+    PARKED --> [*]
+```
 
-    RESUMING          --> LANE_FOLLOWING    : rampa 1.5 s completada
+> La búsqueda del hueco usa el **ToF frontal**; la maniobra de entrada (giro + enderezado) es en
+> **lazo abierto por tiempo**, como un estacionamiento programado.
 
-    CROSSWALK_STOP    --> LANE_FOLLOWING    : espera 3 s completa
+---
 
-    OBSTACLE_HOLD     --> LANE_FOLLOWING    : obstáculo retirado (> 170 mm)
+## 🧱 Diagrama de clases (UML)
 
-    OVERTAKING_LEFT   --> OVERTAKING_PASS   : tiempo izq completado
-    OVERTAKING_PASS   --> OVERTAKING_RETURN : tiempo paso completado
-    OVERTAKING_RETURN --> LANE_FOLLOWING    : tiempo regreso completado
+```mermaid
+classDiagram
+    class MainController {
+        +Mode mode
+        +run()
+        -_run_mode(dt)
+        -_update_vision()
+    }
+    class CameraStream {
+        +get_frame() BGR
+    }
+    class LanePipeline {
+        +process(frame) LaneResult
+        -hsv_white_lo
+        -right_bias
+    }
+    class SignDetector {
+        +get_detections() Detection[]
+    }
+    class DistanceSensor {
+        +front_mm
+        +rear_mm
+    }
+    class PIDController {
+        +compute(error) output
+        +reset()
+    }
+    class AutonomousFSM {
+        +state
+        +update(dt)
+        -_apply_steering()
+    }
+    class ParkingFSM {
+        +state
+        +activate()
+        +update(dt)
+    }
+    class MotorDriver {
+        +set_speed(duty)
+        +brake()
+    }
+    class SteeringDriver {
+        +set_angle(deg)
+        +current_angle
+    }
+    class TurnSignals {
+        +set_mode(mode)
+        +tick()
+    }
+    class BrakeLight {
+        +on()
+        +off()
+    }
 
-    PARKING           --> LANE_FOLLOWING    : PARKED o ABORTED
+    MainController --> CameraStream
+    MainController --> LanePipeline
+    MainController --> SignDetector
+    MainController --> DistanceSensor
+    MainController --> AutonomousFSM
+    MainController --> ParkingFSM
+    AutonomousFSM --> PIDController
+    AutonomousFSM --> MotorDriver
+    AutonomousFSM --> SteeringDriver
+    AutonomousFSM --> TurnSignals
+    AutonomousFSM --> BrakeLight
+    ParkingFSM --> MotorDriver
+    ParkingFSM --> SteeringDriver
+    LanePipeline ..> PIDController : error_px
+```
+
+> El **simulador** reemplaza `CameraStream`, `MotorDriver`, `SteeringDriver` y `DistanceSensor` por
+> *mocks* sobre sockets (`sim_hardware_mocks.py`) — la FSM, el PID y la visión son **idénticos** en
+> sim y en el Pi.
+
+---
+
+## 👁️ Pipeline de visión
+
+`vision/lane_pipeline.py` convierte cada frame en un error de carril en píxeles:
+
+1. **BEV** (Bird's-Eye View) — transformación de perspectiva a vista de pájaro.
+2. **Máscara HSV de blanco** — aísla las líneas. El umbral es **configurable por instancia**:
+   - **Pi físico** → `V ≥ 130` (luz media-baja, p.ej. linterna de celular).
+   - **Unity** → `V ≥ 200` (líneas brillantes sobre piso oscuro).
+3. **Sliding windows** — sigue la línea franja por franja de abajo hacia arriba.
+4. **Suavizado EMA** + **persistencia temporal** — si la línea discontinua desaparece, mantiene la
+   última ruta hasta 1 s y rechaza saltos bruscos del error (anti-falsos giros).
+5. **Sesgo derecho** (`right_bias`) — el objetivo se coloca hacia la línea derecha (carril TMR).
+
+El error resultante alimenta el PID de dirección. Inspecciona la máscara en vivo con:
+
+```bash
+python tools/test_camera.py --no-yolo   # cámara + carril + PID, sin motores
 ```
 
 ---
 
-## Hardware
+## 🛠️ Hardware y pinout
 
-### Componentes principales
+| Componente | Modelo | Interfaz |
+|---|---|---|
+| Computador | Raspberry Pi 5 (16 GB) | — |
+| Cámara | Pi AI Camera (Sony IMX500) | CSI-2 |
+| Sensor distancia | VL53L0X × 2 | I²C bus 4 |
+| Puente H | IBT-2 | GPIO PWM |
+| Controlador servo | PCA9685 | I²C bus 3 |
+| Servo dirección | MG90s | PWM 50 Hz |
+| Mando | PS4 / Xbox | Bluetooth |
 
-| Componente | Modelo | Interfaz | Uso |
-|---|---|---|---|
-| Computador | Raspberry Pi 5 (16 GB) | — | Procesamiento principal |
-| Cámara | Pi AI Camera (Sony IMX500) | CSI-2 | Visión + inferencia NPU |
-| Sensor distancia | VL53L0X × 2 | I²C bus 4 (GPIO 22/23) | Distancia frontal y trasera |
-| Puente H | IBT-2 | GPIO PWM | Control de motor DC |
-| Controlador servo | PCA9685 | I²C bus 3 (GPIO 0/1) | PWM para servo de dirección |
-| Servo dirección | MG90s | PWM 50 Hz | Giro ruedas delanteras |
-| Mando | PS4 / Xbox genérico | Bluetooth | Control manual y cambio de modo |
-
-### Pinout Raspberry Pi 5
+<details>
+<summary><b>📍 Pinout Raspberry Pi 5 (BCM)</b></summary>
 
 ```
-GPIO 18  (Pin 12) ──→ IBT-2 RPWM  (avance)
-GPIO 13  (Pin 33) ──→ IBT-2 LPWM  (reversa)
-GPIO 25  (Pin 22) ──→ LED Rojo    (estado STOP)
-GPIO 26  (Pin 37) ──→ LED Verde   (estado sistema)
+Motor (IBT-2)
+  GPIO 18 → RPWM (avance)        GPIO 13 → LPWM (reversa)
+  R_EN / L_EN → 3.3 V fijo (siempre habilitado)
 
-GPIO 17  (Pin 11) ──→ VL53L0X XSHUT frontal
-GPIO 27  (Pin 13) ──→ VL53L0X XSHUT trasero
+Servo
+  PCA9685 en I²C Bus 3 (SDA=GPIO 0, SCL=GPIO 1) · dirección 0x40
 
-I²C Bus 3  SDA=GPIO 0  (Pin 27)  ──┐
-           SCL=GPIO 1  (Pin 28)  ──┘── PCA9685 (0x40) → Servo canal 15
+ToF (VL53L0X)
+  I²C Bus 4 (SDA=GPIO 23, SCL=GPIO 22)
+  Frontal 0x30 · Trasero 0x29
+  XSHUT frontal=GPIO 24 · trasero=GPIO 27
 
-I²C Bus 4  SDA=GPIO 23 (Pin 16)  ──┐
-           SCL=GPIO 22 (Pin 15)  ──┘── VL53L0X frontal (0x30) + trasero (0x29)
+LEDs (pines en config.py)
+  Estado: STOP=GPIO 25, sistema=GPIO 26
+  Vehiculares: direccional izq/der + freno → señalización TMR
 ```
 
-> **R_EN y L_EN del IBT-2** conectados a 3.3 V fijo (sin GPIO de enable).
+GPIO accedido vía **`lgpio`** (chip 4 en Pi 5) con respaldo a `RPi.GPIO`.
+</details>
 
 ---
 
-## Instalación
+## 📂 Estructura del repositorio
 
-### 1 — Dependencias del sistema
+```
+Carrito/
+├── README.md                  ← este archivo
+├── main.py                    ← loader (chdir a TMR2026/ y ejecuta)
+│
+└── TMR2026/                   ★ sistema activo
+    ├── main.py                ← producción (Raspberry Pi)
+    ├── main_simulator.py      ← gemelo digital (Unity / Sim2Real)
+    ├── config.py              ← TODOS los parámetros
+    │
+    ├── hardware/
+    │   ├── motor.py           ← IBT-2 con soft-start (ACTIVO)
+    │   ├── steering_driver.py ← PCA9685 + Ackermann + STEERING_INVERTED
+    │   ├── distance_sensor.py ← 2× VL53L0X @50 Hz
+    │   ├── signals.py         ← direccionales / hazard (2 Hz)
+    │   └── brake_light.py     ← luz de freno
+    │
+    ├── vision/
+    │   ├── camera_stream.py   ← Picamera2 · RGB→BGR
+    │   ├── lane_pipeline.py   ← carril: BEV + sliding windows + EMA  (ACTIVO)
+    │   └── sign_detector.py   ← YOLOv8n CPU (tmr_signs.pt)           (ACTIVO)
+    │
+    ├── control/
+    │   ├── fsm.py             ← FSM de conducción (5 estados)
+    │   ├── parking_fsm.py     ← estacionamiento en batería
+    │   └── pid_controller.py  ← PID anti-windup
+    │
+    ├── sim_hardware_mocks.py  ← mocks por socket (cámara/motor/servo/ToF)
+    ├── validation_logger.py   ← CSV + tablero de puntos Sim2Real
+    ├── run_validation.py      ← corre las 3 pruebas + gráficas
+    ├── analyze_results.py     ← figuras del artículo (matplotlib)
+    │
+    ├── tools/test_camera.py   ← preview cámara+carril+YOLO (sin motores)
+    ├── weights/tmr_signs.pt   ← modelo YOLO activo
+    └── systemd/               ← auto-arranque en boot
+```
+
+> `autonomy/`, `hardware/camera_manager.py`, `hardware/motor_driver.py`, `vision/lane_detector.py`
+> y `vision/object_detector.py` son **implementaciones alternativas** (NPU on-chip, FSM de rebase,
+> etc.) conservadas como librería; **no** están conectadas a `main.py`.
+
+---
+
+## 📦 Instalación (Raspberry Pi)
+
+<details>
+<summary><b>1 — Dependencias del sistema</b></summary>
 
 ```bash
 sudo apt update && sudo apt install -y \
   python3-picamera2 python3-libcamera imx500-all \
-  python3-pygame \
-  bluetooth bluez python3-dbus \
-  python3-smbus2
+  python3-pygame bluetooth bluez python3-dbus python3-smbus2
 
 pip3 install --break-system-packages \
-  adafruit-circuitpython-pca9685 \
-  adafruit-circuitpython-motor \
-  adafruit-circuitpython-vl53l0x \
-  adafruit-extended-bus \
-  adafruit-blinka \
-  opencv-python-headless \
-  lgpio
+  adafruit-circuitpython-pca9685 adafruit-circuitpython-vl53l0x \
+  adafruit-extended-bus adafruit-blinka \
+  opencv-python-headless lgpio ultralytics
 ```
+</details>
 
-### 2 — Habilitar buses I²C alternativos
-
-Agregar al final de `/boot/firmware/config.txt`:
+<details>
+<summary><b>2 — Buses I²C alternativos</b> (en <code>/boot/firmware/config.txt</code>)</summary>
 
 ```
-# I²C Bus 3 → PCA9685 (servo)
+# Bus 3 → PCA9685 (servo)
 dtoverlay=i2c-gpio,bus=3,i2c_gpio_sda=0,i2c_gpio_scl=1,i2c_gpio_delay_us=2
-
-# I²C Bus 4 → VL53L0X (ToF)
+# Bus 4 → VL53L0X (ToF)
 dtoverlay=i2c-gpio,bus=4,i2c_gpio_sda=23,i2c_gpio_scl=22,i2c_gpio_delay_us=2
 ```
-
-Reiniciar y verificar:
 ```bash
-ls /dev/i2c-*    # deben aparecer /dev/i2c-3 y /dev/i2c-4
 i2cdetect -y 3   # → 0x40 (PCA9685)
 i2cdetect -y 4   # → 0x29 y 0x30 (VL53L0X)
 ```
+</details>
 
-### 3 — Clonar y entrar al directorio
-
-```bash
-git clone https://github.com/TU_USUARIO/Carrito.git
-cd Carrito/TMR2026
-```
-
-### 4 — Conectar el mando Bluetooth
+<details>
+<summary><b>3 — Mando Bluetooth y auto-arranque (systemd)</b></summary>
 
 ```bash
+# Emparejar mando (trusted = reconecta solo al encender)
 bluetoothctl
-  power on
-  agent on
-  scan on
-  # Poner mando en modo pairing (PS/Xbox + Share)
-  pair   XX:XX:XX:XX:XX:XX
-  trust  XX:XX:XX:XX:XX:XX
-  connect XX:XX:XX:XX:XX:XX
-  quit
-```
+  power on; agent on; scan on
+  pair XX:XX:XX:XX:XX:XX; trust XX:XX:XX:XX:XX:XX; connect XX:XX:XX:XX:XX:XX
 
-El mando guardado como *trusted* se reconecta automáticamente al encender la Pi.
-
-### 5 — Arranque automático (servicio systemd)
-
-```bash
-# Editar la ruta en el archivo si es necesario
-sudo cp systemd/carrito_tmr.service /etc/systemd/system/
+# Servicio de arranque
+sudo cp TMR2026/systemd/carrito_tmr.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable carrito_tmr
-sudo systemctl start  carrito_tmr
-
-# Ver logs en vivo
-journalctl -u carrito_tmr -f
+sudo systemctl enable --now carrito_tmr
+journalctl -u carrito_tmr -f   # logs en vivo
 ```
+</details>
+
+Más detalle en [`TMR2026/SETUP.md`](TMR2026/SETUP.md).
 
 ---
 
-## Ejecución
+## ▶️ Ejecución
 
 ```bash
-# Modo normal (sin pantalla — SSH)
-cd Carrito/TMR2026
-python3 main.py
+# En la Raspberry Pi (producción)
+python main.py                 # desde la raíz (recomendado)
+python main.py --display       # con ventana de cámara en HDMI
 
-# Con ventana de cámara en HDMI de la Pi
-python3 main.py --display
+# Si el servicio systemd tiene tomados los pines:
+sudo systemctl stop carrito_tmr && python main.py
+```
 
-# Detener el servicio para ejecutar manualmente
-sudo systemctl stop carrito_tmr
-python3 main.py
+```bash
+# En la PC (gemelo digital — requiere Unity en PLAY)
+cd TMR2026
+python run_validation.py       # 3 pruebas Sim2Real + gráficas + puntaje
+python main_simulator.py --display   # solo ver en vivo
 ```
 
 ---
 
-## Controles del mando
+## 🎮 Controles del mando
 
 | Botón | Acción |
 |---|---|
-| **Cruz / A** | Modo Manual |
-| **Círculo / B** | Modo Visión (cámara ON, motores OFF) — presionar de nuevo vuelve a Manual |
-| **Cuadrado / X** | **Modo Autónomo** (toggle — presionar de nuevo desactiva) |
-| **Triángulo / Y** | Iniciar maniobra de **Estacionamiento en batería** |
-| **Palanca izq. X** | Dirección (modo Manual) |
-| **Gatillo R2** | Acelerador (modo Manual, máx 50 %) |
-| **Gatillo L2** | Reversa suave (modo Manual, máx 30 %) |
+| **A** | Modo **MANUAL** |
+| **B** | Modo **VISION** (cámara ON, motores OFF) |
+| **X** | Modo **AUTONOMOUS** |
+| **Start** | **Paro de emergencia** (freeze) |
+| Palanca izq. X | Dirección (MANUAL) |
+| Gatillos R2 / L2 | Acelerador / reversa (MANUAL) |
+
+> El mando es **hot-plug**: si el PS4 emparejado se enciende después del arranque, se reconecta solo.
 
 ---
 
-## Configuración clave
+## ⚙️ Parámetros clave (`config.py`)
 
-Todos los parámetros están centralizados en **`TMR2026/config.py`**.
-
-### Velocidades autónomas
-
-| Variable | Valor | Descripción |
+| Grupo | Variable | Valor |
 |---|---|---|
-| `SPEED_STRAIGHT` | 22 % | Velocidad en rectas |
-| `SPEED_CURVE` | 15 % | Velocidad en curvas |
-| `SPEED_APPROACH` | 10 % | Velocidad al aproximar señal STOP |
-| `PARK_SEARCH_SPEED` | 15 % | Velocidad durante búsqueda de espacio |
-| `PARK_MANEUVER_SPEED` | 10 % | Velocidad durante maniobra de parking |
-
-> Subir de **5 en 5** hasta que el coche avance bien en pista. No bajar de 10 % para evitar que el motor se trabe.
-
-### Señal STOP
-
-| Variable | Valor | Descripción |
-|---|---|---|
-| `STOP_BRAKE_START_MM` | 700 mm | Empieza el frenado progresivo |
-| `STOP_TARGET_MM` | 270 mm | Distancia final de parada (≤ 30 cm regla TMR) |
-| `STOP_WAIT_SEC` | 5.0 s | Pausa obligatoria frente al STOP |
-| `EMERGENCY_STOP_MM` | 120 mm | Freno de emergencia por obstáculo |
-
-### Ganancias PID
-
-| PID | Kp | Ki | Kd |
-|---|---|---|---|
-| Dirección | 0.09 | 0.002 | 0.025 |
-| Velocidad STOP | 0.035 | 0.001 | 0.008 |
+| **PID dirección** | `STEER_KP / KI / KD` | 0.09 · 0.002 · 0.025 |
+| **PID velocidad** | `VEL_STOP_KP / KI / KD` | 0.035 · 0.001 · 0.008 |
+| **Velocidades** | recta / curva / aproximación | 22 % · 15 % · 10 % |
+| **ALTO** | inicio frenado / objetivo / espera | 700 mm · 270 mm · 5.0 s |
+| **Emergencia** | `EMERGENCY_STOP_MM` | 120 mm |
+| **Servo** | centro / min / max | 90° · 58° · 122° |
+| **Dirección invertida** | `STEERING_INVERTED` | `True` (corrige en el driver) |
+| **Parking** | búsqueda / maniobra / hueco | 15 % · 10 % · 600 mm |
 
 ---
 
-## Guía de calibración en pista
+## 🧵 Concurrencia (hilos)
 
-| Parámetro | Dónde | Cómo ajustar |
-|---|---|---|
-| `STEER_KP` | config.py | Aumentar hasta que oscile → dividir entre 2 |
-| `SPEED_STRAIGHT` | config.py | Subir de 5 en 5 hasta velocidad competitiva |
-| `threshold` en LaneDetector | vision/lane_detector.py | Ajustar (160–200) según iluminación de la pista |
-| `CAMERA_FOCAL_LENGTH_PX` | config.py | Medir señal STOP a 30 cm y ajustar hasta que `stop_dist_mm ≈ 300` |
-| `PARK_OVERSHOOT_SEC` | config.py | Cronometrar cuánto tarda en pasar 30 cm a `PARK_SEARCH_SPEED` |
-| `PARK_REVERSE_LOCK_SEC` | config.py | Ajustar hasta que la reversa describa ~90° de arco |
-
-### Verificar sensores antes de competir
-
-```bash
-cd Carrito/TMR2026
-# 1. Probar servo
-python3 test_servo.py
-
-# 2. Probar mando
-python3 test_gamepad.py
-
-# 3. Ver cámara + carril en modo VISION
-python3 main.py --display
-# → presionar Círculo en el mando
+```
+Bucle principal (50 Hz) ── gamepad → FSM → servo → motor → señales.tick()
+CameraStream  (daemon)  ── 30 FPS · RGB→BGR · bloquea AE/AWB tras warmup
+SignDetector  (daemon)  ── ~12 FPS · YOLO CPU · cola no bloqueante
+DistanceSensor(daemon)  ── 50 Hz · VL53L0X frontal + trasero
+MotorDriver   (daemon)  ── rampa soft-start 50 Hz (evita caída de voltaje)
 ```
 
 ---
 
-## Estructura del repositorio
+## ✅ Checklist de competencia
 
-```
-Carrito/
-│
-├── README.md                         ← Este archivo
-│
-├── TMR2026/                          ← Sistema principal (TMR 2026) ★
-│   ├── main.py                       ← Punto de entrada · FSM de modos
-│   ├── config.py                     ← Todos los parámetros del sistema
-│   ├── requirements.txt
-│   ├── SETUP.md                      ← Guía de instalación detallada
-│   │
-│   ├── hardware/
-│   │   ├── motor_driver.py           ← IBT-2 vía lgpio + slew rate anti-inrush
-│   │   ├── steering_driver.py        ← PCA9685 + geometría Ackermann
-│   │   ├── distance_sensor.py        ← 2× VL53L0X (opcional, graceful degradation)
-│   │   └── camera_manager.py         ← Picamera2 + IMX500 NPU hilo dedicado
-│   │
-│   ├── control/
-│   │   ├── pid_controller.py         ← PID discreto con anti-windup
-│   │   └── gamepad_reader.py         ← Joystick Bluetooth hilo dedicado
-│   │
-│   ├── vision/
-│   │   ├── lane_detector.py          ← Carril: error_px · curvatura · crucero
-│   │   └── object_detector.py        ← STOP · semáforo · auto · persona
-│   │
-│   ├── autonomy/
-│   │   ├── autonomous_mode.py        ← FSM autónoma 8 estados + rebase
-│   │   └── parking_maneuver.py       ← Sub-FSM estacionamiento en batería
-│   │
-│   ├── systemd/
-│   │   └── carrito_tmr.service       ← Auto-arranque en boot (systemd)
-│   │
-│   ├── test_servo.py                 ← Diagnóstico de servo
-│   └── test_gamepad.py               ← Diagnóstico de mando
-│
-├── AUTO_YOLO/                        ← Sistema original (USB webcam + I²C ToF)
-│   └── main.py                       ← Punto de entrada legado
-│
-└── CAMARA/ · CONTROL/ · STATE_MACHINE/   ← Módulos del sistema refactorizado
-```
+- [ ] Mando conectado (`python TMR2026/test_gamepad.py`)
+- [ ] Servo centrado y con rango correcto (`python TMR2026/test_servo.py`)
+- [ ] Cámara detecta el carril en modo **VISION** (`--display`)
+- [ ] Señal ALTO detectada a distancia razonable
+- [ ] Máscara de blanco bien calibrada para la luz de la pista (`tools/test_camera.py --no-yolo`)
+- [ ] Batería LiPo 2S cargada (> 7.4 V)
+- [ ] Pines IBT-2: RPWM=18, LPWM=13, R_EN+L_EN=3.3 V
+- [ ] PCA9685 en `/dev/i2c-3` (0x40), ToF en `/dev/i2c-4`
 
 ---
 
-## Arquitectura de hilos
+## 👤 Créditos
 
-```
-Main thread (50 Hz)
-  ├── Lee estado del gamepad, ToF, cámara
-  ├── Ejecuta FSM de modos (STANDBY / MANUAL / VISION / AUTONOMOUS)
-  └── Llama a AutonomousController.update() en modo AUTONOMOUS
+Desarrollado por **Angel Emmanuel** para el **Torneo Mexicano de Robótica 2026**.
 
-Camera thread (daemon)
-  └── Picamera2 capture_request() → NPU tensors → CameraFrame queue
+**Stack:** Python 3.11 · OpenCV · Picamera2 · Ultralytics YOLOv8 · lgpio · Adafruit CircuitPython · Unity (gemelo digital)
+**Plataforma:** Raspberry Pi 5 (16 GB) + Pi AI Camera (Sony IMX500)
+**Gemelo digital:** [TMR2026_Sim](https://github.com/Empanaditasesina72/TMR2026_Sim-2026-05-24_20-19-01)
 
-ToF thread (daemon)
-  └── VL53L0X.range @ 50 Hz → distance_mm actualizado con lock
+<div align="center">
 
-Gamepad thread (daemon)
-  └── pygame event pump @ 100 Hz → GamepadState + detección de flancos
-```
+*Sim2Real: validado en simulación · desplegado en hardware.* 🏁
 
----
-
-## Competencia — checklist rápido
-
-- [ ] Mando conectado por Bluetooth y reconocido en `test_gamepad.py`
-- [ ] Servo centrado y rango correcto en `test_servo.py`
-- [ ] Cámara detecta las líneas del carril en modo **VISION**
-- [ ] Señal STOP detectada en modo **VISION** a distancia razonable
-- [ ] Batería cargada y voltaje > 7.4 V (LiPo 2S)
-- [ ] Pines IBT-2 conectados: RPWM=GPIO18, LPWM=GPIO13, R_EN+L_EN=3.3 V
-- [ ] PCA9685 en `/dev/i2c-3`, dirección `0x40`
-
----
-
-## Créditos
-
-Desarrollado por **Angel Emmanuel** para el Torneo Mexicano de Robótica 2026.
-
-Hardware de tracción: IBT-2 + Motor DC escala 1:10  
-Plataforma: Raspberry Pi 5 + Pi AI Camera (IMX500)  
-Stack de software: Python 3.11 · OpenCV · Picamera2 · lgpio · Adafruit CircuitPython
+</div>
