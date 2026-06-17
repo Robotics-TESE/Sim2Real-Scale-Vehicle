@@ -23,31 +23,28 @@ def fake_unity_server():
     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     print(f"[FAKE-UNITY] Cliente PC conectado desde {addr}")
 
-    # Frame dummy: pista oscura con 2 lineas blancas verticales (como Unity)
-    frame = np.full((480, 640, 3), 42, dtype=np.uint8)   # gris oscuro #2A
-    cv2.rectangle(frame, (170, 0), (185, 480), (255, 255, 255), -1)  # linea izq
-    cv2.rectangle(frame, (455, 0), (470, 480), (255, 255, 255), -1)  # linea der
+    frame = np.full((480, 640, 3), 42, dtype=np.uint8)
+    cv2.rectangle(frame, (170, 0), (185, 480), (255, 255, 255), -1)
+    cv2.rectangle(frame, (455, 0), (470, 480), (255, 255, 255), -1)
 
     tof_t = cam_t = time.time()
     sent_tof = sent_jpeg = 0
     t0 = time.time()
     while _running and time.time() - t0 < 6:
         now = time.time()
-        # TOF cada 20ms (50 Hz)
         if now - tof_t >= 0.02:
             tof_t = now
             try:
-                conn.sendall(b"TOF:370,2000\n")   # 37 cm frente
+                conn.sendall(b"TOF:370,2000\n")
                 sent_tof += 1
             except Exception:
                 break
-        # JPEG cada 33ms (30 FPS)
         if now - cam_t >= 0.033:
             cam_t = now
             ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
             if ok:
                 data = jpg.tobytes()
-                size = struct.pack(">I", len(data))   # 4 bytes big-endian
+                size = struct.pack(">I", len(data))
                 try:
                     conn.sendall(size + data)
                     sent_jpeg += 1
@@ -61,21 +58,17 @@ def fake_unity_server():
     except: pass
 
 
-# Arrancar Unity falso
 th = threading.Thread(target=fake_unity_server, daemon=True)
 th.start()
 time.sleep(0.5)
 
-# Conectar el cliente REAL del proyecto
 from sim_hardware_mocks import SimulatorClient
 print("[TEST] Conectando SimulatorClient real...")
 sim = SimulatorClient(host="127.0.0.1", port=PORT)
 
-# Mandar comandos PC -> Unity (motor + servo)
 sim.motor.set_speed(30.0)
 sim.steering.set_angle(75.0)
 
-# Recibir 5 segundos
 print("[TEST] Recibiendo sensores 5 s...")
 start = time.time()
 tof_ok = frame_ok = 0

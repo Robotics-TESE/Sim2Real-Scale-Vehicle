@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 test_sim_connection.py — Verifica que la conexión Sim2Real funcione.
 
@@ -18,7 +17,6 @@ def test_connection():
     print("=" * 70)
     
     try:
-        # Test 1: Import
         print("\n[TEST 1/6] Importing simulator client...")
         try:
             from sim_hardware_mocks import SimulatorClient
@@ -28,7 +26,6 @@ def test_connection():
             print("  Hint: Run from TMR2026/ directory: cd TMR2026 && python test_sim_connection.py")
             return False
         
-        # Test 2: Connection
         print("\n[TEST 2/6] Connecting to Unity simulator (127.0.0.1:5005)...")
         try:
             sim = SimulatorClient(host='127.0.0.1', port=5005, timeout=5.0)
@@ -41,7 +38,6 @@ def test_connection():
             print(f"  ✗ FAILED: {e}")
             return False
         
-        # Test 3: Motor control
         print("\n[TEST 3/6] Testing motor (sending 25% PWM)...")
         try:
             sim.motor.set_speed(25.0)
@@ -54,7 +50,6 @@ def test_connection():
             print(f"  ✗ FAILED: {e}")
             return False
         
-        # Test 4: Steering control
         print("\n[TEST 4/6] Testing steering (sending 75° left)...")
         try:
             sim.steering.set_angle(75.0)
@@ -67,7 +62,6 @@ def test_connection():
             print(f"  ✗ FAILED: {e}")
             return False
         
-        # Test 5: Sensors (10 seconds)
         print("\n[TEST 5/6] Reading sensors for 10 seconds...")
         start = time.time()
         frame_count = 0
@@ -75,12 +69,10 @@ def test_connection():
         tof_readings = []
         
         while time.time() - start < 10.0:
-            # Read ToF
             if sim.distance.front_mm is not None:
                 tof_count += 1
                 tof_readings.append(sim.distance.front_mm)
             
-            # Read camera
             frame = sim.camera.get_latest_frame()
             if frame is not None:
                 frame_count += 1
@@ -103,7 +95,6 @@ def test_connection():
             avg_dist = sum(tof_readings) / len(tof_readings)
             print(f"  ✓ ToF distance: {avg_dist:.0f} mm (avg of {len(tof_readings)} readings)")
         
-        # Test 6: Brake
         print("\n[TEST 6/6] Testing brake...")
         try:
             sim.motor.brake()
@@ -116,7 +107,6 @@ def test_connection():
             print(f"  ✗ FAILED: {e}")
             return False
         
-        # Cleanup
         sim.close()
         time.sleep(0.1)
         

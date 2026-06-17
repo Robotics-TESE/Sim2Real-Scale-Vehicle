@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 test_fsm_transitions.py — verifica las 5 transiciones de AutonomousFSM y
 la interacción con signals + brake_light.  Sin hardware.
@@ -15,8 +14,6 @@ import time
 from control.fsm import AutonomousFSM, FSMState
 from hardware.signals import SignalMode
 
-
-# ─── Dobles de prueba (mocks mínimos) ─────────────────────────────────────────
 
 class FakeMotor:
     def __init__(self):
@@ -66,8 +63,6 @@ def _make_fsm():
     )
 
 
-# ─── Tests ────────────────────────────────────────────────────────────────────
-
 def test_crucero_to_precaucion_on_sign():
     fsm = _make_fsm()
     fsm.activate()
@@ -76,8 +71,8 @@ def test_crucero_to_precaucion_on_sign():
     fsm.sign_visible = True
     fsm.update(dt=0.02)
     assert fsm.state == FSMState.PRECAUCION
-    assert fsm.signals.mode == SignalMode.HAZARD    # aviso encendido
-    assert fsm.brake_light.state is False           # aún no frenando
+    assert fsm.signals.mode == SignalMode.HAZARD
+    assert fsm.brake_light.state is False
 
 
 def test_precaucion_to_frenado_by_lidar():
@@ -85,10 +80,9 @@ def test_precaucion_to_frenado_by_lidar():
     fsm.activate()
     fsm.lane_conf    = 1.0
     fsm.sign_visible = True
-    fsm.update(0.02)                               # → PRECAUCION
-    fsm.lidar_mm     = 250                         # ≤ LIDAR_STOP_MM (300)
-    fsm.update(0.02)                               # → FRENADO → ESPERA
-    # El ciclo FRENADO transiciona inmediato a ESPERA
+    fsm.update(0.02)
+    fsm.lidar_mm     = 250
+    fsm.update(0.02)
     assert fsm.state in (FSMState.FRENADO, FSMState.ESPERA)
     assert fsm.brake_light.state is True
     assert fsm.signals.mode == SignalMode.HAZARD
@@ -101,11 +95,11 @@ def test_precaucion_to_frenado_by_bbox_when_no_lidar():
     fsm.activate()
     fsm.lane_conf    = 1.0
     fsm.sign_visible = True
-    fsm.update(0.02)                               # → PRECAUCION
+    fsm.update(0.02)
     assert fsm.state == FSMState.PRECAUCION
 
-    fsm.lidar_mm         = None                   # lidar caído
-    fsm.sign_distance_mm = 300                    # 30 cm → ≤ 350
+    fsm.lidar_mm         = None
+    fsm.sign_distance_mm = 300
     fsm.update(0.02)
     assert fsm.state in (FSMState.FRENADO, FSMState.ESPERA)
     assert fsm.brake_light.state is True
@@ -122,7 +116,6 @@ def test_espera_uses_monotonic_not_sleep(monkeypatch):
     fsm.sign_visible = True
     fsm.lidar_mm     = 100
 
-    # Iterar updates hasta llegar a ESPERA (≤4 transiciones)
     for _ in range(5):
         fsm.update(0.02)
         if fsm.state == FSMState.ESPERA:
@@ -130,23 +123,20 @@ def test_espera_uses_monotonic_not_sleep(monkeypatch):
     assert fsm.state == FSMState.ESPERA
     assert fsm.brake_light.state is True
 
-    # A los 4.5 s todavía NO debe salir
     fake_t[0] += 4.5
     fsm.update(0.02)
     assert fsm.state == FSMState.ESPERA
 
-    # A los 5.1 s debe saltar a REANUDAR
     fake_t[0] += 0.7
     fsm.update(0.02)
     assert fsm.state == FSMState.REANUDAR
-    assert fsm.brake_light.state is False   # freno suelto al reanudar
+    assert fsm.brake_light.state is False
     assert fsm.signals.mode == SignalMode.OFF
 
 
 def test_signals_tick_called_every_update():
     """El parpadeo debe avanzar en cada update(), activa o no la FSM."""
     fsm = _make_fsm()
-    # Incluso sin activate(), tick() sigue corriendo (para no congelar LEDs)
     for _ in range(5):
         fsm.update(0.02)
     assert fsm.signals.ticks == 5

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 export_imx500.py — Convierte tmr_signs.pt al formato del NPU IMX500 (.rpk).
 
@@ -34,13 +33,12 @@ import shutil
 import sys
 from pathlib import Path
 
-HERE     = Path(__file__).resolve().parent.parent          # TMR2026/
+HERE     = Path(__file__).resolve().parent.parent
 WEIGHTS  = HERE / "weights" / "tmr_signs.pt"
-DATA     = HERE.parent / "traffic_lights" / "data.yaml"     # calibración INT8
+DATA     = HERE.parent / "traffic_lights" / "data.yaml"
 DST_RPK  = HERE / "weights" / "tmr_signs_imx500.rpk"
 DST_LBL  = HERE / "weights" / "tmr_signs_imx500_labels.txt"
 
-# Orden de clases del dataset (respaldo si el export no deja labels.txt)
 FALLBACK_LABELS = ("green", "left", "red", "right", "stop", "straight", "yellow")
 
 
@@ -77,8 +75,6 @@ def main() -> int:
     out_dir = Path(out)
     print(f"[IMX500] Export crudo en: {out_dir}")
 
-    # Localizar el .rpk y labels dentro del directorio exportado y copiarlos
-    # a los nombres canónicos que espera config.py.
     rpks = sorted(out_dir.rglob("*.rpk"))
     if not rpks:
         print("[IMX500] ERROR: el export no produjo ningún .rpk.")

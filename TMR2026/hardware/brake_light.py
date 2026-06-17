@@ -1,13 +1,11 @@
-# -*- coding: utf-8 -*-
-"""
-brake_light.py — LED de freno para TMR 2026.
+"""Brake light for the TMR 2026 vehicle.
 
-Un solo LED que se enciende mientras el coche está frenando o detenido
-(estados FRENADO / ESPERA de la FSM). NO parpadea — encendido continuo.
+A single LED that turns on while the car is braking or stopped (FRENADO /
+ESPERA states of the FSM). It does not blink -- it stays solid.
 
-Pin por defecto (BCM): 16.
-Backend: `lgpio` (chip 4, Pi 5) con fallback a `RPi.GPIO`. Si no hay
-ningún backend, queda en modo no-op sin romper al resto del sistema.
+Default pin (BCM): 16.
+Backend: `lgpio` (chip 4, Pi 5) with an `RPi.GPIO` fallback. If no backend
+is available it becomes a no-op without breaking the rest of the system.
 """
 
 from typing import Optional
@@ -15,13 +13,13 @@ from typing import Optional
 
 class BrakeLight:
     """
-    Controlador del LED de freno.
+    Brake-light controller.
 
-    Uso::
+    Usage::
 
         brake = BrakeLight(pin=16)
-        brake.on()    # al entrar a FRENADO o ESPERA
-        brake.off()   # al salir
+        brake.on()    # when entering FRENADO or ESPERA
+        brake.off()   # when leaving
         brake.close()
     """
 
@@ -39,7 +37,7 @@ class BrakeLight:
             self._handle = lgpio.gpiochip_open(4)
             lgpio.gpio_claim_output(self._handle, self._pin, 0)
             self._backend = "lgpio"
-            print(f"[BRAKE] lgpio OK — pin={self._pin}")
+            print(f"[BRAKE] lgpio OK - pin={self._pin}")
             return
         except Exception as e:
             last_err = e
@@ -51,12 +49,12 @@ class BrakeLight:
             GPIO.setup(self._pin, GPIO.OUT, initial=GPIO.LOW)
             self._GPIO    = GPIO
             self._backend = "RPi.GPIO"
-            print(f"[BRAKE] RPi.GPIO OK — pin={self._pin}")
+            print(f"[BRAKE] RPi.GPIO OK - pin={self._pin}")
             return
         except Exception as e:
             last_err = e
 
-        print(f"[BRAKE] Sin GPIO — luz de freno deshabilitada ({last_err})")
+        print(f"[BRAKE] No GPIO - brake light disabled ({last_err})")
         self._backend = None
 
     def _write(self, value: int) -> None:

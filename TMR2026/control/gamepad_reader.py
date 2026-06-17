@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 gamepad_reader.py — Mando Bluetooth (Xbox/PS4 genérico) vía pygame.
 
@@ -44,9 +43,9 @@ class GamepadState:
         btn_auto: bool = False,
         connected: bool = False,
     ):
-        self.throttle  = throttle    # [0, 1]
-        self.brake     = brake       # [0, 1]
-        self.steer     = steer       # [-1, 1]  negativo=izquierda
+        self.throttle  = throttle
+        self.brake     = brake
+        self.steer     = steer
         self.btn_manual = btn_manual
         self.btn_vision = btn_vision
         self.btn_auto   = btn_auto
@@ -62,7 +61,7 @@ class GamepadReader:
     a estar disponible.
     """
 
-    POLL_HZ = 100  # frecuencia de lectura
+    POLL_HZ = 100
 
     def __init__(self):
         pygame.init()
@@ -73,7 +72,6 @@ class GamepadReader:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
-        # Botones en estado previo para detectar flanco de subida
         self._prev_buttons: dict[int, bool] = {
             BTN_BACK_TO_MANUAL: False,
             BTN_VISION_TEST: False,
@@ -85,9 +83,6 @@ class GamepadReader:
             BTN_AUTONOMOUS: False,
         }
 
-    # ----------------------------------------------------------
-    # Control del hilo
-    # ----------------------------------------------------------
     def start(self):
         self._stop_event.clear()
         self._thread = threading.Thread(
@@ -103,9 +98,6 @@ class GamepadReader:
             self._thread.join(timeout=2.0)
         pygame.quit()
 
-    # ----------------------------------------------------------
-    # API pública (thread-safe)
-    # ----------------------------------------------------------
     @property
     def state(self) -> GamepadState:
         with self._lock:
@@ -126,24 +118,17 @@ class GamepadReader:
                 self._button_pressed[btn_id] = False
             return pressed
 
-    # ----------------------------------------------------------
-    # Hilo de lectura
-    # ----------------------------------------------------------
     def _poll_loop(self):
         interval = 1.0 / self.POLL_HZ
         joy: pygame.joystick.JoystickType | None = None
 
         while not self._stop_event.is_set():
-            # ── Inicialización / reconexión ──
             if joy is None:
                 pygame.joystick.quit()
                 pygame.joystick.init()
                 if pygame.joystick.get_count() > 0:
                     joy = pygame.joystick.Joystick(0)
                     joy.init()
-                    # Esperar a que los ejes reporten su posición real.
-                    # Sin esto, R2/L2 devuelven 0.0 en lugar de -1.0
-                    # y se interpreta como 50% de acelerador en el primer frame.
                     for _ in range(5):
                         pygame.event.pump()
                         time.sleep(0.02)
@@ -153,17 +138,15 @@ class GamepadReader:
                     time.sleep(0.5)
                     continue
 
-            # ── Procesar eventos (necesario para actualizar estados) ──
             try:
                 pygame.event.pump()
             except pygame.error:
                 joy = None
                 continue
 
-            # ── Leer ejes ──
             try:
                 raw_steer    = joy.get_axis(AXIS_STEER)
-                raw_throttle = joy.get_axis(AXIS_THROTTLE)  # -1 soltado, +1 fondo
+                raw_throttle = joy.get_axis(AXIS_THROTTLE)
                 raw_brake    = joy.get_axis(AXIS_BRAKE)
             except pygame.error:
                 joy = None
@@ -173,7 +156,6 @@ class GamepadReader:
             throttle = self._trigger_to_01(raw_throttle, TRIGGER_DEADBAND)
             brake    = self._trigger_to_01(raw_brake,    TRIGGER_DEADBAND)
 
-            # ── Leer botones y detectar flancos ──
             btn_states: dict[int, bool] = {}
             for btn_id in (BTN_BACK_TO_MANUAL, BTN_VISION_TEST, BTN_AUTONOMOUS):
                 try:
@@ -185,7 +167,7 @@ class GamepadReader:
             with self._lock:
                 for btn_id, current in btn_states.items():
                     prev = self._prev_buttons[btn_id]
-                    if current and not prev:           # flanco de subida
+                    if current and not prev:
                         self._button_pressed[btn_id] = True
                     self._prev_buttons[btn_id] = current
 
@@ -201,19 +183,15 @@ class GamepadReader:
 
             time.sleep(interval)
 
-    # ----------------------------------------------------------
-    # Helpers
-    # ----------------------------------------------------------
     @staticmethod
     def _apply_deadband(value: float, band: float) -> float:
         if abs(value) < band:
             return 0.0
-        # Reescalar para que la salida arranque en 0 en el borde del deadband
         sign = 1.0 if value > 0 else -1.0
         return sign * (abs(value) - band) / (1.0 - band)
 
     @staticmethod
     def _trigger_to_01(raw: float, deadband: float) -> float:
         """Convierte el rango de gatillo [-1, 1] → [0, 1]."""
-        normalized = (raw + 1.0) / 2.0   # [-1,1] → [0,1]
+        normalized = (raw + 1.0) / 2.0
         return 0.0 if normalized < deadband else normalized

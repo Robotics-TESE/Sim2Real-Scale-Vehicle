@@ -1,33 +1,31 @@
-# -*- coding: utf-8 -*-
-"""
-imx500_detector.py — Cámara + detección de señales en el NPU del IMX500.
+"""Camera + sign detection on the IMX500 NPU.
 
-La Pi AI Camera (Sony IMX500) tiene un acelerador neuronal DENTRO del sensor:
-el modelo corre en la cámara y la Pi solo recibe, por cada frame, la imagen
-más los tensores de salida en la metadata. CPU usada para inferencia: ~0%.
+The Pi AI Camera (Sony IMX500) has a neural accelerator INSIDE the sensor:
+the model runs in the camera and the Pi only receives, per frame, the image
+plus the output tensors in the metadata. CPU used for inference: ~0%.
 
-`IMX500CameraStream` fusiona los dos roles que en el camino CPU hacen
-`CameraStream` y `SignDetector`, exponiendo AMBAS interfaces:
+`IMX500CameraStream` merges the two roles that `CameraStream` and
+`SignDetector` play in the CPU path, exposing BOTH interfaces:
 
-  Como cámara (para LanePipeline / overlay):
-      get_frame() → BGR (regla de oro RGB888 → cv2.COLOR_RGB2BGR)
+  As a camera (for LanePipeline / overlay):
+      get_frame() -> BGR (golden rule RGB888 -> cv2.COLOR_RGB2BGR)
 
-  Como detector (para la FSM / telemetría):
+  As a detector (for the FSM / telemetry):
       get_detections() / has_sign() / has_any_sign() / closest_sign()
-      update_frame() es no-op (el NPU ya tiene el frame; existe solo para
-      que main.py no cambie según el backend).
+      update_frame() is a no-op (the NPU already has the frame; it exists
+      only so main.py does not change with the backend).
 
-Mismas garantías que el camino CPU:
-  • Etiquetas normalizadas: "stop" → "stop_sign"; solo las 7 clases del
-    modelo tmr_signs (green/left/red/right/stop/straight/yellow).
-  • Distancia por pinhole con la altura real de cada clase.
-  • Histéresis de N frames consecutivos antes de publicar una etiqueta.
-  • Respaldo por COLOR (rojo/púrpura) cuando el NPU no ve el STOP.
-  • AE/AWB bloqueados tras el warmup (sin parpadeo de exposición).
+Same guarantees as the CPU path:
+  - Normalized labels: "stop" -> "stop_sign"; only the 7 classes of the
+    tmr_signs model (green/left/red/right/stop/straight/yellow).
+  - Pinhole distance using the real height of each class.
+  - Hysteresis of N consecutive frames before publishing a label.
+  - COLOR fallback (red/purple) when the NPU misses the STOP.
+  - AE/AWB locked after warm-up (no exposure flicker).
 
-El .rpk se genera con `tools/export_imx500.py` (en la Pi o cualquier Linux).
-Si el .rpk no existe, main.py ni siquiera importa este módulo y usa el
-camino CPU (NCNN) — ver `VehicleTMR._build_vision()`.
+The .rpk is generated with `tools/export_imx500.py` (on the Pi or any Linux).
+If the .rpk does not exist, main.py does not even import this module and uses
+the CPU path (NCNN) -- see `VehicleTMR._build_vision()`.
 """
 
 from __future__ import annotations
@@ -57,19 +55,10 @@ except ImportError:
     CAMERA_SHARPNESS, CAMERA_DENOISE, CAMERA_BUFFERS = 4.0, 2, 6
     STOP_SIGN_REAL_HEIGHT_M = 0.04
 
-# Orden EXACTO de clases del dataset traffic_lights/data.yaml con el que se
-# entrenó tmr_signs.pt. Respaldo si el .rpk no trae labels en sus intrinsics
-# y no existe el archivo de labels.
 DEFAULT_LABELS = ("green", "left", "red", "right", "stop", "straight", "yellow")
 
-# Área mínima del bbox (px²) — igual que el camino CPU (descarta señales
-# lejanísimas que solo meten ruido a la FSM).
 MIN_BBOX_AREA = 150
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Funciones puras (testeables en PC, sin picamera2)
-# ─────────────────────────────────────────────────────────────────────────────
 
 def map_raw_detections(
     raw: list[tuple[int, int, int, int, float, int]],
@@ -78,10 +67,10 @@ def map_raw_detections(
     min_area: int = MIN_BBOX_AREA,
 ) -> list[Detection]:
     """
-    Convierte detecciones crudas del NPU — (x1, y1, x2, y2, score, cls_id)
-    en píxeles del frame — a objetos `Detection` con la misma semántica que
-    el camino CPU: normalización "stop"→"stop_sign", filtro de clases/área
-    y distancia pinhole por clase.
+    Convert raw NPU detections -- (x1, y1, x2, y2, score, cls_id) in frame
+    pixels -- into `Detection` objects with the same semantics as the CPU
+    path: "stop"->"stop_sign" normalization, class/area filter and per-class
+    pinhole distance.
     """
     dets: list[Detection] = []
     for x1, y1, x2, y2, score, cls_id in raw:
@@ -90,7 +79,7 @@ def map_raw_detections(
         if not (0 <= cls_id < len(labels)):
             continue
         label = str(labels[cls_id]).strip().lower().replace(" ", "_")
-        if label == "stop_sign":          # por si el labels.txt ya viene normalizado
+        if label == "stop_sign":
             label = "stop"
         if label not in SIGN_REAL_HEIGHT_M:
             continue
@@ -110,9 +99,9 @@ def map_raw_detections(
 
 class LabelHysteresis:
     """
-    Filtro temporal idéntico al de SignDetector: una etiqueta se publica
-    solo tras aparecer en `n_frames` frames consecutivos; del frame se
-    conserva la detección de mayor área (la más cercana).
+    Temporal filter identical to SignDetector's: a label is published only
+    after appearing in `n_frames` consecutive frames; the largest-area
+    detection of the frame (the closest one) is kept.
     """
 
     def __init__(self, n_frames: int = 3):
@@ -140,15 +129,11 @@ class LabelHysteresis:
                 if count >= self._n and label in self._last_raw]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Stream principal (requiere Pi + picamera2 + .rpk)
-# ─────────────────────────────────────────────────────────────────────────────
-
 class IMX500CameraStream:
     """
-    Captura frames y detecciones del NPU en un único hilo demonio.
+    Captures frames and detections from the NPU in a single daemon thread.
 
-    Uso (idéntico a CameraStream + SignDetector juntos)::
+    Usage (identical to CameraStream + SignDetector together)::
 
         cam = IMX500CameraStream("weights/tmr_signs_imx500.rpk")
         cam.start()
@@ -181,28 +166,26 @@ class IMX500CameraStream:
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        self._started = False    # start()/stop() idempotentes — main.py llama
-        self._stopped = False    # a ambos roles (camera y sign_det) del objeto
+        self._started = False
+        self._stopped = False
 
-        # ── IMX500: cargar el .rpk en el NPU ANTES de crear Picamera2 ──
         from picamera2 import Picamera2
         from picamera2.devices.imx500 import IMX500, NetworkIntrinsics
 
-        print(f"[NPU] Cargando modelo en el IMX500: {rpk_path}")
+        print(f"[NPU] Loading model into the IMX500: {rpk_path}")
         self._imx500 = IMX500(rpk_path)
         self._intrinsics = self._imx500.network_intrinsics or NetworkIntrinsics()
 
         self._labels = self._resolve_labels(labels_path)
-        print(f"[NPU] Clases: {list(self._labels)}")
+        print(f"[NPU] Classes: {list(self._labels)}")
 
-        # FPS efectivo: el NPU puede limitar la tasa de inferencia.
         rate = getattr(self._intrinsics, "inference_rate", None)
         eff_fps = int(min(fps, rate)) if rate else fps
 
         self._picam2 = Picamera2(self._imx500.camera_num)
         cfg = self._picam2.create_preview_configuration(
             main={
-                "format": "RGB888",     # regla de oro: RGB → BGR en captura
+                "format": "RGB888",
                 "size":   (width, height),
             },
             controls={
@@ -220,7 +203,7 @@ class IMX500CameraStream:
         self._picam2.configure(cfg)
 
     def _resolve_labels(self, labels_path: Optional[str]):
-        """labels.txt (export) → intrinsics del .rpk → orden del dataset."""
+        """labels.txt (export) -> .rpk intrinsics -> dataset order."""
         if labels_path:
             try:
                 with open(labels_path, "r", encoding="utf-8") as f:
@@ -234,15 +217,14 @@ class IMX500CameraStream:
             return tuple(intr_labels)
         return DEFAULT_LABELS
 
-    # ─── Ciclo de vida ────────────────────────────────────────────────────────
 
     def start(self) -> None:
         if self._started:
-            return                      # segundo start() (rol detector) → no-op
+            return
         self._started = True
 
         self._picam2.start()
-        print(f"[NPU] Estabilizando AE/AWB ({self._warmup_s:.1f} s)...")
+        print(f"[NPU] Settling AE/AWB ({self._warmup_s:.1f} s)...")
         time.sleep(self._warmup_s)
         self._lock_ae_awb()
 
@@ -250,7 +232,7 @@ class IMX500CameraStream:
         self._thread = threading.Thread(
             target=self._capture_loop, name="IMX500Stream", daemon=True)
         self._thread.start()
-        print("[NPU] Cámara + NPU listos (inferencia on-chip, CPU libre).")
+        print("[NPU] Camera + NPU ready (on-chip inference, CPU free).")
 
     def stop(self) -> None:
         if self._stopped:
@@ -264,17 +246,15 @@ class IMX500CameraStream:
         except Exception:
             pass
 
-    # ─── API de cámara (compatible con CameraStream) ──────────────────────────
 
     def get_frame(self) -> Optional[np.ndarray]:
-        """Último frame BGR. Nunca bloquea; None si aún no hay captura."""
+        """Latest BGR frame. Never blocks; None if there is no capture yet."""
         with self._frame_lock:
             return self._frame.copy() if self._frame is not None else None
 
-    # ─── API de detector (compatible con SignDetector) ────────────────────────
 
     def update_frame(self, frame: np.ndarray) -> None:
-        """No-op: el NPU recibe el frame dentro del propio sensor."""
+        """No-op: the NPU receives the frame inside the sensor itself."""
 
     def get_detections(self) -> list[Detection]:
         with self._result_lock:
@@ -293,7 +273,6 @@ class IMX500CameraStream:
         dets = [d for d in dets if d.distance_m is not None]
         return min(dets, key=lambda d: d.distance_m) if dets else None
 
-    # ─── Bloqueo AE/AWB (mismo método que CameraStream) ───────────────────────
 
     def _lock_ae_awb(self) -> None:
         try:
@@ -310,11 +289,10 @@ class IMX500CameraStream:
                 ctrl["ColourGains"] = tuple(cgains)
 
             self._picam2.set_controls(ctrl)
-            print(f"[NPU] AE/AWB bloqueados — exp={exp} µs  gain={gain:.2f}")
+            print(f"[NPU] AE/AWB locked - exp={exp} us  gain={gain:.2f}")
         except Exception as e:
-            print(f"[NPU] No se pudo bloquear AE/AWB: {e}")
+            print(f"[NPU] Could not lock AE/AWB: {e}")
 
-    # ─── Hilo de captura: frame + tensores en la MISMA petición ───────────────
 
     def _capture_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -326,15 +304,12 @@ class IMX500CameraStream:
                 finally:
                     request.release()
 
-                # REGLA DE ORO: RGB888 → BGR para todos los módulos OpenCV
                 bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
                 with self._frame_lock:
                     self._frame = bgr
 
                 raw = self._parse_npu_output(metadata)
 
-                # Respaldo por color cuando el NPU no ve el STOP (señal con
-                # estilo distinto al training set) — mismo camino que en CPU.
                 if not any(d.label == "stop_sign" for d in raw):
                     blob = _detect_red_blob(bgr)
                     if blob is not None:
@@ -351,16 +326,15 @@ class IMX500CameraStream:
                     self._results = confirmed
 
             except Exception:
-                # Error transitorio de captura — no tirar el hilo
                 time.sleep(0.01)
 
     def _parse_npu_output(self, metadata: dict) -> list[Detection]:
         """
-        Tensores del IMX500 → detecciones en píxeles del frame `main`.
-        Sigue el flujo oficial del demo de picamera2 para modelos de
-        detección (incluidos los exportados por Ultralytics formato `imx`):
-        boxes/scores/classes + banderas de los intrinsics + conversión de
-        coordenadas a través del ISP (`convert_inference_coords`).
+        IMX500 tensors -> detections in `main` frame pixels.
+        Follows the official picamera2 demo flow for detection models
+        (including those exported by Ultralytics in `imx` format):
+        boxes/scores/classes + intrinsics flags + coordinate conversion
+        through the ISP (`convert_inference_coords`).
         """
         np_outputs = self._imx500.get_outputs(metadata, add_batch=True)
         if np_outputs is None or len(np_outputs) < 3:
@@ -388,8 +362,6 @@ class IMX500CameraStream:
         for box, score, cls in zip(boxes, scores, classes):
             if float(score) < self._conf:
                 continue
-            # convert_inference_coords: (y0,x0,y1,x1) normalizado al tensor
-            # de entrada → (x, y, w, h) en píxeles del stream `main`.
             x, y, w, h = self._imx500.convert_inference_coords(
                 np.asarray(box).flatten(), metadata, self._picam2)
             raw.append((int(x), int(y), int(x + w), int(y + h),

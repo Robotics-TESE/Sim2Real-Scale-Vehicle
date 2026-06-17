@@ -27,8 +27,8 @@ HERE = Path(__file__).resolve().parent
 TMR_ROOT = HERE.parent
 sys.path.insert(0, str(TMR_ROOT))
 
-import cv2  # noqa: E402
-from vision.camera_stream import CameraStream  # noqa: E402
+import cv2
+from vision.camera_stream import CameraStream
 
 OUT_DIR = HERE / "captures"
 
@@ -73,7 +73,7 @@ def main() -> None:
             print("[CAP] INTERACTIVO — Enter para capturar, 'q' + Enter para salir.")
             while True:
                 line = sys.stdin.readline()
-                if line == "":  # EOF
+                if line == "":
                     break
                 if line.strip().lower() == "q":
                     break

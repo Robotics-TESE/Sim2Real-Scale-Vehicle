@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 conftest.py — configuración común de los tests de TMR 2026.
 

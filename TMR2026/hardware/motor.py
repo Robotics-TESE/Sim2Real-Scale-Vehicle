@@ -1,29 +1,26 @@
-# -*- coding: utf-8 -*-
-"""
-motor.py — Control IBT-2 con Soft-Start anti voltage-sag (TMR 2026).
+"""IBT-2 motor control with anti voltage-sag soft-start (TMR 2026).
 
-NOTA DE COMPATIBILIDAD Pi 5:
-  RPi.GPIO no soporta hardware PWM en Pi 5 (kernel 6.1+).
-  Este módulo intenta RPi.GPIO (software PWM) primero.
-  Si falla, usa lgpio (hardware PWM nativo Pi 5) automáticamente.
-  En Pi 4 / Pi 3, RPi.GPIO funciona normalmente.
+Pi 5 COMPATIBILITY NOTE:
+  RPi.GPIO does not support hardware PWM on the Pi 5 (kernel 6.1+).
+  This module tries RPi.GPIO (software PWM) first.
+  If that fails it automatically uses lgpio (native Pi 5 hardware PWM).
+  On Pi 4 / Pi 3, RPi.GPIO works normally.
 
-Cableado IBT-2:
-  RPWM → GPIO 18  (avance)
-  LPWM → GPIO 13  (reversa)
-  R_EN + L_EN → 3.3V físico (siempre habilitado, sin control por GPIO)
+IBT-2 wiring:
+  RPWM -> GPIO 18  (forward)
+  LPWM -> GPIO 13  (reverse)
+  R_EN + L_EN -> physical 3.3V (always enabled, no GPIO control)
 
 Soft-Start:
-  Un hilo interno (50 Hz) sube el duty a máx. _SLEW_UP % por tick.
-  La bajada es 4× más rápida (seguridad).
-  brake() corta INSTANTÁNEAMENTE a 0 sin pasar por la rampa.
+  An internal thread (50 Hz) raises the duty by at most _SLEW_UP % per tick.
+  Ramp-down is 4x faster (safety).
+  brake() cuts INSTANTANEOUSLY to 0 without going through the ramp.
 """
 
 import threading
 import time
 from typing import Optional
 
-# ── Selección de backend ──────────────────────────────────────────────────────
 try:
     import RPi.GPIO as _GPIO
     _GPIO.setmode(_GPIO.BCM)
@@ -36,25 +33,25 @@ except (ImportError, RuntimeError):
     except ImportError:
         _BACKEND = "mock"
 
-_PWM_FREQ = 1_000   # Hz — frecuencia PWM para el IBT-2
+_PWM_FREQ = 1_000
 
 
 class MotorDriver:
     """
-    Interfaz de alto nivel para el puente H IBT-2.
+    High-level interface for the IBT-2 H-bridge.
 
-    Uso::
+    Usage::
 
         m = MotorDriver()
-        m.set_speed(35.0)   # 35 % de potencia hacia adelante
-        m.brake()           # corte inmediato a 0
+        m.set_speed(35.0)   # 35 % power forward
+        m.brake()           # instantaneous cut to 0
         m.cleanup()
     """
 
     MAX_DUTY   = 100.0
-    _SLEW_UP   = 2.0    # % por tick al subir   (50 Hz → ~1 s de 0 → 40 %)
-    _SLEW_DOWN = 8.0    # % por tick al bajar   (frenado más rápido)
-    _TICK_S    = 0.02   # 50 Hz hilo interno
+    _SLEW_UP   = 2.0
+    _SLEW_DOWN = 8.0
+    _TICK_S    = 0.02
 
     def __init__(self, pin_rpwm: int = 18, pin_lpwm: int = 13):
         self._pin_r = pin_rpwm
@@ -72,13 +69,12 @@ class MotorDriver:
         self._thread.start()
         print(f"[MOTOR] Backend: {_BACKEND}  RPWM=GPIO{pin_rpwm}  LPWM=GPIO{pin_lpwm}")
 
-    # ─── API pública ──────────────────────────────────────────────────────────
 
     def set_speed(self, duty: float) -> None:
         """
-        Establece la velocidad objetivo.  La rampa interna la alcanzará
-        gradualmente (soft-start).  duty ∈ [-MAX_DUTY, +MAX_DUTY];
-        positivo = avance, negativo = reversa.
+        Set the target speed. The internal ramp reaches it gradually
+        (soft-start). duty in [-MAX_DUTY, +MAX_DUTY];
+        positive = forward, negative = reverse.
         """
         duty = max(-self.MAX_DUTY, min(self.MAX_DUTY, float(duty)))
         with self._lock:
@@ -86,8 +82,8 @@ class MotorDriver:
 
     def brake(self) -> None:
         """
-        Freno inmediato: corta el PWM a EXACTAMENTE 0.
-        Omite la rampa.  Llama esto en FRENADO/ESPERA.
+        Instantaneous brake: cuts the PWM to EXACTLY 0.
+        Bypasses the ramp. Call this in FRENADO/ESPERA.
         """
         with self._lock:
             self._target  = 0.0
@@ -96,12 +92,12 @@ class MotorDriver:
 
     @property
     def current_duty(self) -> float:
-        """Duty cycle actual (el que se está aplicando al puente H)."""
+        """Current duty cycle (the one being applied to the H-bridge)."""
         with self._lock:
             return self._current
 
     def cleanup(self) -> None:
-        """Libera GPIO. Llamar en shutdown."""
+        """Release GPIO. Call on shutdown."""
         self._running = False
         self.brake()
         time.sleep(self._TICK_S * 2)
@@ -118,7 +114,6 @@ class MotorDriver:
             except Exception:
                 pass
 
-    # ─── Inicialización de hardware ───────────────────────────────────────────
 
     def _init_hw(self) -> None:
         if _BACKEND == "RPi.GPIO":
@@ -130,18 +125,15 @@ class MotorDriver:
             self._pwm_l.start(0)
 
         elif _BACKEND == "lgpio":
-            self._h = _lgpio.gpiochip_open(4)   # chip 4 en Pi 5
+            self._h = _lgpio.gpiochip_open(4)
             _lgpio.gpio_claim_output(self._h, self._pin_r)
             _lgpio.gpio_claim_output(self._h, self._pin_l)
             _lgpio.tx_pwm(self._h, self._pin_r, _PWM_FREQ, 0)
             _lgpio.tx_pwm(self._h, self._pin_l, _PWM_FREQ, 0)
 
-        # mock: no hace nada (útil para pruebas en PC)
-
-    # ─── Hilo de rampa (50 Hz) ────────────────────────────────────────────────
 
     def _ramp_loop(self) -> None:
-        """Mueve _current hacia _target con límite de rampa."""
+        """Move _current toward _target with a ramp limit."""
         while self._running:
             with self._lock:
                 target  = self._target
@@ -163,10 +155,9 @@ class MotorDriver:
 
             time.sleep(self._TICK_S)
 
-    # ─── Aplicación al hardware ───────────────────────────────────────────────
 
     def _apply_hw(self, duty: float) -> None:
-        """Escribe el duty cycle en el puente H. Sin rampa."""
+        """Write the duty cycle to the H-bridge. No ramp."""
         r = max(0.0, min(100.0,  duty))
         l = max(0.0, min(100.0, -duty))
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 motor_driver.py — Control del puente H IBT-2 vía lgpio (Pi 5 nativo).
 
@@ -18,11 +17,8 @@ El control de dirección y velocidad se hace solo con RPWM y LPWM:
 import lgpio
 from config import PIN_MOTOR_RPWM, PIN_MOTOR_LPWM, MOTOR_PWM_FREQ
 
-_CHIP = 4   # GPIO chip Pi 5 (gpiochip4 → gpiochip0 vía symlink)
+_CHIP = 4
 
-# Máximo incremento de duty por llamada a set_throttle (anti-inrush de corriente).
-# A 50 Hz: 3%/tick → ~240 ms para llegar de 0% a 22% en autónomo.
-# Las decrementadas (freno/paro) siempre son instantáneas por seguridad.
 _SLEW_STEP = 3.0
 
 
@@ -33,12 +29,10 @@ class MotorDriver:
         self._h = lgpio.gpiochip_open(_CHIP)
         lgpio.gpio_claim_output(self._h, PIN_MOTOR_RPWM)
         lgpio.gpio_claim_output(self._h, PIN_MOTOR_LPWM)
-        # Arrancar PWM en 0%
         lgpio.tx_pwm(self._h, PIN_MOTOR_RPWM, MOTOR_PWM_FREQ, 0)
         lgpio.tx_pwm(self._h, PIN_MOTOR_LPWM, MOTOR_PWM_FREQ, 0)
         self._current_duty = 0.0
 
-    # ----------------------------------------------------------
     def enable(self):
         """No-op — el enable está en hardware (3.3V fijo)."""
         pass
@@ -64,7 +58,6 @@ class MotorDriver:
         """
         duty = max(-100.0, min(100.0, duty))
 
-        # Slew rate: solo limitar incrementos (no decrementos ni cambio de signo)
         if duty > self._current_duty:
             diff = duty - self._current_duty
             if diff > _SLEW_STEP:

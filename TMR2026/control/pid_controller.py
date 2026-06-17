@@ -1,34 +1,31 @@
-# -*- coding: utf-8 -*-
-"""
-pid_controller.py — Controlador PID genérico con anti-windup.
+"""Generic PID controller with anti-windup.
 
-Características:
-  - Anti-windup por clamping del integrador.
-  - Derivada sobre la medida (no sobre el error) para evitar
-    "derivative kick" cuando el setpoint cambia abruptamente.
-  - Reset en caliente sin perder el estado I/D previo.
+Features:
+  - Anti-windup via integrator clamping.
+  - Derivative on measurement (not on error) to avoid "derivative kick"
+    when the setpoint changes abruptly.
+  - Hot reset without losing the previous I/D state.
 """
 
 import time
 
 
 class PIDController:
-    """
-    PID discreto de tiempo real.
+    """Real-time discrete PID.
 
     Parameters
     ----------
     kp, ki, kd : float
-        Ganancias proporcional, integral y derivativa.
+        Proportional, integral and derivative gains.
     setpoint : float
-        Valor objetivo (puede cambiarse en runtime).
+        Target value (can be changed at runtime).
     output_limits : (min, max)
-        Saturación de la salida.
+        Output saturation.
     integral_limits : (min, max)
-        Límites del acumulador integral (anti-windup).
+        Integral accumulator limits (anti-windup).
     derivative_on_measurement : bool
-        Si True, la derivada se calcula sobre la medida (recomendado).
-        Si False, se calcula sobre el error (comportamiento clásico).
+        If True, the derivative is computed on the measurement (recommended).
+        If False, it is computed on the error (classic behaviour).
     """
 
     def __init__(
@@ -50,34 +47,32 @@ class PIDController:
         self.derivative_on_measurement = derivative_on_measurement
 
         self._integral   = 0.0
-        self._last_input = 0.0  # Para derivada sobre medida
-        self._last_error = 0.0  # Para derivada sobre error
+        self._last_input = 0.0
+        self._last_error = 0.0
         self._last_time  = time.monotonic()
 
-        # Componentes del último cálculo (lectura para telemetría / overlay).
         self.last_error  = 0.0
         self.last_p      = 0.0
         self.last_i      = 0.0
         self.last_d      = 0.0
         self.last_output = 0.0
 
-    # ----------------------------------------------------------
     def compute(self, measurement: float, dt: float | None = None) -> float:
         """
-        Calcula la salida del PID.
+        Compute the PID output.
 
         Parameters
         ----------
         measurement : float
-            Valor actual de la variable controlada.
+            Current value of the controlled variable.
         dt : float, optional
-            Intervalo de tiempo en segundos.  Si None se usa el tiempo
-            real transcurrido desde la última llamada.
+            Time interval in seconds. If None, the real time elapsed since
+            the previous call is used.
 
         Returns
         -------
         float
-            Salida saturada del controlador.
+            Saturated controller output.
         """
         now = time.monotonic()
         if dt is None:
@@ -88,10 +83,8 @@ class PIDController:
 
         error = self.setpoint - measurement
 
-        # Proporcional
         p_out = self.kp * error
 
-        # Integral con anti-windup
         self._integral += error * dt
         self._integral = max(
             self.integral_limits[0],
@@ -99,7 +92,6 @@ class PIDController:
         )
         i_out = self.ki * self._integral
 
-        # Derivada
         if self.derivative_on_measurement:
             d_out = -self.kd * (measurement - self._last_input) / dt
             self._last_input = measurement
@@ -119,7 +111,7 @@ class PIDController:
         return output
 
     def reset(self):
-        """Reinicia el estado interno sin cambiar las ganancias."""
+        """Reset the internal state without changing the gains."""
         self._integral   = 0.0
         self._last_input = 0.0
         self._last_error = 0.0

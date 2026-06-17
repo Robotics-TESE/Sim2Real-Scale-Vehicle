@@ -1,24 +1,22 @@
-# -*- coding: utf-8 -*-
-"""
-signals.py — Direccionales y hazards para TMR 2026.
+"""Turn signals and hazards for the TMR 2026 vehicle.
 
-Un LED por lado (izquierdo / derecho). Hazard = ambos parpadeando a la vez.
-Parpadeo controlado por `time.monotonic()` — NUNCA `sleep()`, NUNCA un hilo.
-El main loop llama a `tick()` a 50 Hz; el parpadeo ocurre entre llamadas.
+One LED per side (left / right). Hazard = both blinking together. The blink
+is driven by `time.monotonic()` -- NEVER `sleep()`, NEVER a thread. The main
+loop calls `tick()` at 50 Hz; the blink happens between calls.
 
-Modos:
-  OFF    → ambos LEDs apagados
-  LEFT   → parpadea solo el izquierdo
-  RIGHT  → parpadea solo el derecho
-  HAZARD → parpadean ambos en fase
+Modes:
+  OFF    -> both LEDs off
+  LEFT   -> only the left one blinks
+  RIGHT  -> only the right one blinks
+  HAZARD -> both blink in phase
 
-Pines por defecto (BCM): 19 (izq) / 20 (der). Coinciden con
-`vision_config.yaml:gpio.led_turn_left / led_turn_right` para reutilizar
-el cableado del script de prueba `vision_module.py`.
+Default pins (BCM): 19 (left) / 20 (right). They match
+`vision_config.yaml:gpio.led_turn_left / led_turn_right` to reuse the wiring
+of the `vision_module.py` test script.
 
-Backend: intenta `lgpio` (chip 4, Pi 5) y cae a `RPi.GPIO` si no está.
-Si ningún backend está disponible, el módulo queda en modo no-op —
-el resto del programa sigue funcionando sin direccionales.
+Backend: tries `lgpio` (chip 4, Pi 5) and falls back to `RPi.GPIO`. If no
+backend is available the module becomes a no-op -- the rest of the program
+keeps running without turn signals.
 """
 
 from enum import Enum, auto
@@ -35,14 +33,14 @@ class SignalMode(Enum):
 
 class TurnSignals:
     """
-    Controlador de direccionales / hazards con parpadeo por software.
+    Turn-signal / hazard controller with software blinking.
 
-    Uso::
+    Usage::
 
         signals = TurnSignals(pin_left=19, pin_right=20, blink_hz=2.0)
         signals.set_mode(SignalMode.LEFT)
         while running:
-            signals.tick()      # cada iteración del loop principal
+            signals.tick()      # every iteration of the main loop
         signals.close()
     """
 
@@ -54,27 +52,25 @@ class TurnSignals:
     ):
         self._pin_l = pin_left
         self._pin_r = pin_right
-        # 2 Hz → periodo 0.5 s → semi-periodo 0.25 s (0.25 on / 0.25 off)
         self._half_period = 0.5 / blink_hz if blink_hz > 0 else 0.25
 
         self._mode        = SignalMode.OFF
         self._last_toggle = time.monotonic()
-        self._blink_on    = False   # fase actual del parpadeo
+        self._blink_on    = False
 
         self._backend: Optional[str] = None
         self._handle:  Optional[int] = None
         self._setup_gpio()
 
-    # ─── Backend GPIO (lgpio → RPi.GPIO fallback) ────────────────────────────
     def _setup_gpio(self) -> None:
         try:
             import lgpio
             self._lgpio  = lgpio
-            self._handle = lgpio.gpiochip_open(4)   # Pi 5 chip 4
+            self._handle = lgpio.gpiochip_open(4)
             lgpio.gpio_claim_output(self._handle, self._pin_l, 0)
             lgpio.gpio_claim_output(self._handle, self._pin_r, 0)
             self._backend = "lgpio"
-            print(f"[SIGNALS] lgpio OK — izq={self._pin_l}  der={self._pin_r}")
+            print(f"[SIGNALS] lgpio OK - left={self._pin_l}  right={self._pin_r}")
             return
         except Exception as e:
             last_err = e
@@ -87,12 +83,12 @@ class TurnSignals:
             GPIO.setup(self._pin_r, GPIO.OUT, initial=GPIO.LOW)
             self._GPIO    = GPIO
             self._backend = "RPi.GPIO"
-            print(f"[SIGNALS] RPi.GPIO OK — izq={self._pin_l}  der={self._pin_r}")
+            print(f"[SIGNALS] RPi.GPIO OK - left={self._pin_l}  right={self._pin_r}")
             return
         except Exception as e:
             last_err = e
 
-        print(f"[SIGNALS] Sin GPIO — direccionales deshabilitadas ({last_err})")
+        print(f"[SIGNALS] No GPIO - turn signals disabled ({last_err})")
         self._backend = None
 
     def _write(self, pin: int, value: int) -> None:
@@ -101,14 +97,13 @@ class TurnSignals:
         elif self._backend == "RPi.GPIO":
             self._GPIO.output(pin, value)
 
-    # ─── API pública ─────────────────────────────────────────────────────────
     def set_mode(self, mode: SignalMode) -> None:
-        """Cambia el modo. Si es el mismo no hace nada."""
+        """Change the mode. Does nothing if it is the same."""
         if mode == self._mode:
             return
         self._mode        = mode
         self._last_toggle = time.monotonic()
-        self._blink_on    = True          # primer flanco encendido inmediato
+        self._blink_on    = True
         self._apply()
 
     @property
@@ -117,9 +112,9 @@ class TurnSignals:
 
     def tick(self) -> None:
         """
-        Avanza el parpadeo según `time.monotonic()`.
-        Llamar en cada iteración del loop principal (50 Hz recomendado).
-        No bloquea.
+        Advance the blink according to `time.monotonic()`.
+        Call on every iteration of the main loop (50 Hz recommended).
+        Non-blocking.
         """
         if self._mode == SignalMode.OFF:
             if self._blink_on:
@@ -134,7 +129,7 @@ class TurnSignals:
             self._apply()
 
     def _apply(self) -> None:
-        """Escribe el estado actual a los dos LEDs según mode + blink_on."""
+        """Write the current state to both LEDs based on mode + blink_on."""
         left  = 0
         right = 0
         if self._blink_on:
@@ -146,7 +141,7 @@ class TurnSignals:
         self._write(self._pin_r, right)
 
     def close(self) -> None:
-        """Apaga LEDs y libera GPIO."""
+        """Turn LEDs off and release GPIO."""
         try:
             if self._backend == "lgpio" and self._handle is not None:
                 self._lgpio.gpio_write(self._handle, self._pin_l, 0)

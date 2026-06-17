@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 camera_manager.py — Pi AI Camera (Sony IMX500) vía Picamera2.
 
@@ -44,12 +43,9 @@ from config import (
 )
 
 
-# ------------------------------------------------------------------
-# Estructuras de datos
-# ------------------------------------------------------------------
 @dataclass
 class Detection:
-    label: str          # nombre legible (ej. "STOP")
+    label: str
     class_id: int
     confidence: float
     x1: int; y1: int
@@ -80,14 +76,11 @@ class Detection:
 
 @dataclass
 class CameraFrame:
-    image: np.ndarray               # BGR888, shape (H, W, 3)
+    image: np.ndarray
     detections: list[Detection] = field(default_factory=list)
     timestamp: float = field(default_factory=time.monotonic)
 
 
-# ------------------------------------------------------------------
-# Gestor principal
-# ------------------------------------------------------------------
 class CameraManager:
     """
     Captura y procesado de la Pi AI Camera en hilo dedicado.
@@ -98,7 +91,6 @@ class CameraManager:
     """
 
     def __init__(self):
-        # --- IMX500: carga el modelo en el NPU de la cámara ---
         self._imx500 = IMX500(IMX500_MODEL_PATH)
         self._picam2 = Picamera2(self._imx500.camera_num)
 
@@ -106,12 +98,9 @@ class CameraManager:
             main={"format": "BGR888", "size": (CAMERA_WIDTH, CAMERA_HEIGHT)},
             controls={
                 "FrameRate"          : CAMERA_FPS,
-                # Balance de blancos — Indoor corrige el tono azulado en interiores
                 "AwbEnable"          : True,
                 "AwbMode"            : CAMERA_AWB_MODE,
-                # Exposición automática
                 "AeEnable"           : True,
-                # Calidad de imagen para detección
                 "Contrast"           : CAMERA_CONTRAST,
                 "Saturation"         : CAMERA_SATURATION,
                 "Sharpness"          : CAMERA_SHARPNESS,
@@ -121,7 +110,6 @@ class CameraManager:
         )
         self._picam2.configure(cfg)
 
-        # Cola de profundidad 1: el consumidor siempre lee el frame más fresco.
         self._queue: queue.Queue[CameraFrame] = queue.Queue(maxsize=1)
 
         self._stop_event = threading.Event()
@@ -129,22 +117,16 @@ class CameraManager:
         self._last_frame: CameraFrame | None = None
         self._frame_lock = threading.Lock()
 
-        # Mapa de class_id → label legible (se construye al iniciar)
         self._class_map: dict[int, str] = {}
 
-    # ------------------------------------------------------------------
-    # Control del hilo
-    # ------------------------------------------------------------------
     def start(self):
         self._picam2.start()
-        # Dar tiempo al IMX500 para cargar modelo y al AWB para estabilizarse
         time.sleep(3.0)
 
-        # Intentar activar autofoco continuo (solo en cámaras con VCM)
         try:
             self._picam2.set_controls({
-                "AfMode"  : 2,   # Continuous autofocus
-                "AfSpeed" : 1,   # Fast
+                "AfMode"  : 2,
+                "AfSpeed" : 1,
             })
             print("[CAM] Autoenfoque continuo activado")
         except Exception:
@@ -166,9 +148,6 @@ class CameraManager:
             self._thread.join(timeout=3.0)
         self._picam2.stop()
 
-    # ------------------------------------------------------------------
-    # API pública (thread-safe)
-    # ------------------------------------------------------------------
     def get_latest_frame(self) -> Optional[CameraFrame]:
         """
         Retorna el frame más reciente sin bloquear.
@@ -184,17 +163,12 @@ class CameraManager:
         except queue.Empty:
             return None
 
-    # ------------------------------------------------------------------
-    # Hilo de captura
-    # ------------------------------------------------------------------
     def _capture_loop(self):
         while not self._stop_event.is_set():
             try:
-                # Captura sincronizada: frame + metadata en la misma petición
                 request = self._picam2.capture_request()
-                image = request.make_array("main")          # numpy BGR
+                image = request.make_array("main")
 
-                # --- Inferencia NPU: leer tensores de salida del IMX500 ---
                 metadata = request.get_metadata()
                 request.release()
 
@@ -202,11 +176,9 @@ class CameraManager:
 
                 frame = CameraFrame(image=image, detections=detections)
 
-                # Actualizar frame más reciente (para polling no bloqueante)
                 with self._frame_lock:
                     self._last_frame = frame
 
-                # Publicar en cola (descartar viejo si está llena)
                 try:
                     self._queue.put_nowait(frame)
                 except queue.Full:
@@ -217,12 +189,8 @@ class CameraManager:
                         pass
 
             except Exception as e:
-                # No crashear el hilo por errores transitorios de captura
                 time.sleep(0.01)
 
-    # ------------------------------------------------------------------
-    # Parseo de salida del NPU
-    # ------------------------------------------------------------------
     def _parse_npu_output(
         self, metadata: dict, img_shape: tuple
     ) -> list[Detection]:
@@ -246,15 +214,13 @@ class CameraManager:
         ih, iw = img_shape[:2]
 
         try:
-            # ── Formato EfficientDet (4 outputs): boxes, classes, scores, count ──
             if len(np_outputs) >= 4:
-                boxes   = np_outputs[0][0]         # (N, 4) [y1,x1,y2,x2] norm
-                classes = np_outputs[1][0]         # (N,)
-                scores  = np_outputs[2][0]         # (N,)
-                count   = int(np_outputs[3][0])    # número real de detecciones
-                tf_format = True                   # coordenadas en [y,x,y,x]
+                boxes   = np_outputs[0][0]
+                classes = np_outputs[1][0]
+                scores  = np_outputs[2][0]
+                count   = int(np_outputs[3][0])
+                tf_format = True
             else:
-                # ── Formato YOLOv8 / NanoDet (3 outputs): boxes, scores, classes ──
                 boxes   = np_outputs[0][0]
                 scores  = np_outputs[1][0]
                 classes = np_outputs[2][0]
@@ -277,19 +243,16 @@ class CameraManager:
 
             box = boxes[i]
             if tf_format:
-                # [ymin, xmin, ymax, xmax] normalizados → píxeles
                 y1 = int(box[0] * ih)
                 x1 = int(box[1] * iw)
                 y2 = int(box[2] * ih)
                 x2 = int(box[3] * iw)
             else:
-                # [xmin, ymin, xmax, ymax] normalizados → píxeles
                 x1 = int(box[0] * iw)
                 y1 = int(box[1] * ih)
                 x2 = int(box[2] * iw)
                 y2 = int(box[3] * ih)
 
-            # Sanitizar
             x1, x2 = sorted([max(0, x1), min(iw - 1, x2)])
             y1, y2 = sorted([max(0, y1), min(ih - 1, y2)])
 
@@ -302,9 +265,6 @@ class CameraManager:
 
         return detections
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
     def _build_class_map(self):
         """
         Construye el mapa class_id → nombre usando los intrínsecos del
@@ -320,7 +280,6 @@ class CameraManager:
                             self._class_map[idx] = friendly
                             break
         except Exception:
-            # Si el modelo no expone etiquetas, se usa class_id como clave
             pass
 
     @property

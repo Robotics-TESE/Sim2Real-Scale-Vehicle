@@ -1,26 +1,24 @@
-# -*- coding: utf-8 -*-
-"""
-main.py — Punto de entrada del vehículo autónomo TMR 2026.
-Raspberry Pi 5 · Sony IMX500 · IBT-2 · PCA9685 · VL53L0X
+"""Entry point for the TMR 2026 autonomous vehicle.
+Raspberry Pi 5 - Sony IMX500 - IBT-2 - PCA9685 - VL53L0X
 
-Arquitectura de hilos:
-  CameraStream  → hilo demonio, actualiza frame BGR a 30 FPS
-  SignDetector  → hilo demonio, inferencia YOLO a ~12 FPS
-  DistanceSensor→ hilo demonio, polling VL53L0X a 50 Hz
-  Main loop     → 50 Hz: gamepad + FSM + servo + motor
+Thread architecture:
+  CameraStream   -> daemon thread, updates the BGR frame at 30 FPS
+  SignDetector   -> daemon thread, YOLO inference at ~12 FPS
+  DistanceSensor -> daemon thread, VL53L0X polling at 50 Hz
+  Main loop      -> 50 Hz: gamepad + FSM + servo + motor
 
-Modos:
-  STANDBY    → Motor OFF, servo al centro. Espera al mando.
-  MANUAL     → Palanca izq → servo | R2 → avance | L2 → reversa
-  AUTONOMOUS → FSM de 5 estados (CRUCERO/PRECAUCIÓN/FRENADO/ESPERA/REANUDAR)
-  PARKING    → Estacionamiento en batería (SEARCH→MANEUVER→PARKED)
+Modes:
+  STANDBY    -> Motor OFF, servo centred. Waits for the gamepad.
+  MANUAL     -> Left stick -> servo | R2 -> forward | L2 -> reverse
+  AUTONOMOUS -> 5-state FSM (CRUCERO/PRECAUCION/FRENADO/ESPERA/REANUDAR)
+  PARKING    -> Battery parking (SEARCH -> MANEUVER -> PARKED)
 
-Botones gamepad (PS4/Xbox genérico):
-  Cuadrado / X  → Toggle AUTONOMOUS (activa/desactiva)
-  Cruz    / A   → MANUAL
-  Círculo / B   → Modo VISION (cámara ON, motores OFF, debug)
-  Triángulo / Y → Toggle PARKING (estacionamiento en batería)
-  Start         → Emergencia: freno inmediato + MANUAL
+Gamepad buttons (generic PS4/Xbox):
+  Square   / X -> Toggle AUTONOMOUS (enable/disable)
+  Cross    / A -> MANUAL
+  Circle   / B -> VISION mode (camera ON, motors OFF, debug)
+  Triangle / Y -> Toggle PARKING (battery parking)
+  Start        -> Emergency: instant brake + MANUAL
 """
 
 import os
@@ -31,19 +29,11 @@ import subprocess
 
 import cv2
 
-# ── Flag de display (--display para abrir ventana) ────────────────────────────
 _DISPLAY = "--display" in sys.argv
 if _DISPLAY:
     os.environ.setdefault("DISPLAY", ":0")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Liberar GPIO del servicio systemd antes de inicializar hardware.
-# Si carrito_tmr.service está activo, los pines ya están reclamados y
-# RPi.GPIO/lgpio fallan con 'GPIO not allocated'. Ejecutamos `systemctl stop`
-# automáticamente (passwordless sudo). Si nosotros mismos somos el servicio
-# (INVOCATION_ID viene de systemd), no hacemos nada.
-# ─────────────────────────────────────────────────────────────────────────────
 def _release_gpio_from_systemd() -> None:
     if os.environ.get("INVOCATION_ID"):
         return
@@ -57,7 +47,7 @@ def _release_gpio_from_systemd() -> None:
     if active.returncode != 0:
         return
 
-    print("[SYS] carrito_tmr.service activo — deteniéndolo para liberar GPIO...")
+    print("[SYS] carrito_tmr.service active - stopping it to free the GPIO...")
     try:
         subprocess.run(
             ["sudo", "-n", "systemctl", "stop", "carrito_tmr"],
@@ -65,26 +55,21 @@ def _release_gpio_from_systemd() -> None:
             check=True,
         )
     except subprocess.CalledProcessError:
-        print("[SYS] No pude detener el servicio (¿sudo sin NOPASSWD?).")
-        print("[SYS] Ejecuta:  sudo systemctl stop carrito_tmr")
+        print("[SYS] Could not stop the service (sudo without NOPASSWD?).")
+        print("[SYS] Run:  sudo systemctl stop carrito_tmr")
         sys.exit(1)
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        print(f"[SYS] Error deteniendo servicio: {e}")
+        print(f"[SYS] Error stopping the service: {e}")
         sys.exit(1)
-    time.sleep(0.5)  # dar tiempo al kernel a liberar los pines
-    print("[SYS] Servicio detenido — GPIO libre.")
+    time.sleep(0.5)
+    print("[SYS] Service stopped - GPIO free.")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONSTANTES HARDWARE — única fuente de verdad: config.py
-# (Los buses I²C, canal PCA9685 y pines XSHUT los leen los drivers
-#  directamente de config.py; aquí solo se importa lo que usa este módulo.)
-# ─────────────────────────────────────────────────────────────────────────────
 from config import (
-    PIN_MOTOR_RPWM     as MOTOR_RPWM,     # GPIO BCM 18 — PWM avance
-    PIN_MOTOR_LPWM     as MOTOR_LPWM,     # GPIO BCM 13 — PWM reversa
-    SERVO_CENTER_ANGLE as SERVO_CENTER,   # 90° = ruedas al frente
-    SERVO_MIN_ANGLE    as SERVO_MIN,      # tope físico izquierda (58°)
-    SERVO_MAX_ANGLE    as SERVO_MAX,      # tope físico derecha  (122°)
+    PIN_MOTOR_RPWM     as MOTOR_RPWM,
+    PIN_MOTOR_LPWM     as MOTOR_LPWM,
+    SERVO_CENTER_ANGLE as SERVO_CENTER,
+    SERVO_MIN_ANGLE    as SERVO_MIN,
+    SERVO_MAX_ANGLE    as SERVO_MAX,
     PIN_LED_TURN_LEFT, PIN_LED_TURN_RIGHT, PIN_LED_BRAKE, SIGNAL_BLINK_HZ,
     BTN_MANUAL, BTN_VISION, BTN_AUTONOMOUS, BTN_PARKING, BTN_EMERGENCY,
     AXIS_STEER, AXIS_THROTTLE, AXIS_BRAKE,
@@ -92,32 +77,21 @@ from config import (
     USE_IMX500_NPU, IMX500_RPK_PATH, IMX500_LABELS_PATH, IMX500_CONF,
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONSTANTES DE COMPORTAMIENTO
-# ─────────────────────────────────────────────────────────────────────────────
-LOOP_HZ           = 50      # Hz del bucle de control principal
+LOOP_HZ           = 50
 CAMERA_W          = 640
 CAMERA_H          = 480
 CAMERA_FPS        = 30
-AWB_WARMUP_S      = 2.0     # segundos estabilización AE/AWB
+AWB_WARMUP_S      = 2.0
 YOLO_MODEL        = "weights/tmr_signs.pt"
-YOLO_CONF         = 0.55      # paridad con el simulador validado (Sim2Real).
-                              # Con 0.15 el modelo inventaba señales (verde,
-                              # flechas…) y la FSM frenaba sin razón. Si la
-                              # señal física no se parece al training set, el
-                              # detector por COLOR de SignDetector la respalda.
+YOLO_CONF         = 0.55
 YOLO_IMGSZ        = 320
 
-# PID de dirección (error en px → corrección en grados)
-PID_KP            = 0.08    # Subir si el coche oscila poco → aumentar
-PID_KI            = 0.002   # Anti-windup a long-term drift
-PID_KD            = 0.025   # Amortiguación → aumentar si el servo vibra
-PID_OUT_MIN       = -(SERVO_CENTER - SERVO_MIN)   # −32° (tope físico real)
-PID_OUT_MAX       =  (SERVO_MAX - SERVO_CENTER)   # +32°
+PID_KP            = 0.08
+PID_KI            = 0.002
+PID_KD            = 0.025
+PID_OUT_MIN       = -(SERVO_CENTER - SERVO_MIN)
+PID_OUT_MAX       =  (SERVO_MAX - SERVO_CENTER)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# IMPORTAR MÓDULOS DEL PROYECTO
-# ─────────────────────────────────────────────────────────────────────────────
 from hardware.motor            import MotorDriver
 from hardware.steering_driver  import SteeringDriver
 from hardware.distance_sensor  import DistanceSensor
@@ -131,15 +105,12 @@ from control.fsm               import AutonomousFSM
 from control.parking_fsm       import ParkingFSM, ParkingState
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LECTOR DE TECLADO (no bloqueante) — alternativa al gamepad
-# ─────────────────────────────────────────────────────────────────────────────
 class _KeyboardReader:
     """
-    Lee una tecla por iteración desde stdin SIN bloquear el bucle de control.
-    Pone el TTY en modo cbreak (cada tecla llega al instante, sin Enter).
-    Si stdin no es TTY (e.g. ejecución bajo systemd), queda inerte.
-    Restaura los atributos del terminal en close().
+    Reads one key per iteration from stdin WITHOUT blocking the control loop.
+    Puts the TTY in cbreak mode (each key arrives instantly, no Enter).
+    If stdin is not a TTY (e.g. running under systemd) it stays inert.
+    Restores the terminal attributes in close().
     """
 
     def __init__(self):
@@ -153,7 +124,7 @@ class _KeyboardReader:
             tty.setcbreak(sys.stdin.fileno())
             self.enabled = True
         except Exception as e:
-            print(f"[KB] Teclado no disponible: {e}")
+            print(f"[KB] Keyboard not available: {e}")
 
     def get_key(self):
         if not self.enabled:
@@ -176,17 +147,13 @@ class _KeyboardReader:
         self.enabled = False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CLASE PRINCIPAL
-# ─────────────────────────────────────────────────────────────────────────────
-
 class VehicleTMR:
     """
-    Controlador completo del vehículo TMR 2026.
+    Full controller for the TMR 2026 vehicle.
 
-    Integra hardware, visión y FSM en un único bucle de control a 50 Hz.
-    El procesamiento de imagen ocurre en hilos separados — el bucle de
-    control NUNCA espera a la visión.
+    Integrates hardware, vision and the FSM in a single 50 Hz control loop.
+    Image processing happens in separate threads -- the control loop NEVER
+    waits for vision.
     """
 
     class Mode:
@@ -194,19 +161,17 @@ class VehicleTMR:
         MANUAL     = "MANUAL"
         VISION     = "VISION"
         AUTONOMOUS = "AUTONOMOUS"
-        PARKING    = "PARKING"     # estacionamiento en batería
+        PARKING    = "PARKING"
 
-    # Modos que usan la ventana de debug (--display)
     DISPLAY_MODES = ("VISION", "AUTONOMOUS", "PARKING")
 
-    MODE_COOLDOWN_S = 0.4   # mínimo entre cambios de modo (anti-rebote)
+    MODE_COOLDOWN_S = 0.4
 
     def __init__(self):
         print("=" * 55)
-        print("  TMR 2026 — Inicializando hardware...")
+        print("  TMR 2026 - Initializing hardware...")
         print("=" * 55)
 
-        # ── Hardware ──────────────────────────────────────────────
         self.motor    = MotorDriver(pin_rpwm=MOTOR_RPWM, pin_lpwm=MOTOR_LPWM)
         self.steering = SteeringDriver()
         self.sensor   = DistanceSensor()
@@ -217,15 +182,11 @@ class VehicleTMR:
         )
         self.brake_light = BrakeLight(pin=PIN_LED_BRAKE)
 
-        # ── Visión ────────────────────────────────────────────────
-        # NPU del IMX500 si hay .rpk (inferencia on-chip, CPU libre);
-        # si no, cámara normal + YOLO en CPU (NCNN).
         self.camera, self.sign_det = self._build_vision()
         self.lane_pipe = LanePipeline(
             frame_w=CAMERA_W, frame_h=CAMERA_H, debug=_DISPLAY
         )
 
-        # ── PID y FSM ─────────────────────────────────────────────
         self.pid = PIDController(
             kp=PID_KP, ki=PID_KI, kd=PID_KD,
             setpoint=0.0,
@@ -237,45 +198,41 @@ class VehicleTMR:
             signals     = self.signals,
             brake_light = self.brake_light,
         )
-        # FSM de estacionamiento en batería (misma que validó el simulador)
         self.parking = ParkingFSM(self.motor, self.steering)
 
-        # ── Gamepad (pygame) ──────────────────────────────────────
         self._joystick = None
         self._init_gamepad()
 
-        # ── Teclado (alternativa sin gamepad) ─────────────────────
         self._kb = _KeyboardReader()
         if self._kb.enabled:
-            print("[KB] Atajos:  A=MANUAL  B=VISION  X=AUTO  P=PARKING  "
-                  "Space=EMERG  S=STANDBY  Q=salir")
+            print("[KB] Shortcuts:  A=MANUAL  B=VISION  X=AUTO  P=PARKING  "
+                  "Space=EMERG  S=STANDBY  Q=quit")
 
-        # ── Estado interno ────────────────────────────────────────
         self._mode            = self.Mode.STANDBY
         self._running         = True
         self._last_mode_t     = 0.0
         self._last_lane       = LaneResult(error_px=0.0, confidence=0.0)
         self._btn_prev: dict  = {}
-        self._sign_action     = ""   # acción de la señal más cercana (telemetría)
+        self._sign_action     = ""
 
         signal.signal(signal.SIGINT,  self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
 
-        print("[INIT] Hardware listo. Esperando mando Bluetooth...")
+        print("[INIT] Hardware ready. Waiting for the Bluetooth gamepad...")
 
-    # ─── Construcción del backend de visión ───────────────────────────────────
 
     def _build_vision(self):
         """
-        Elige el backend de detección de señales según el hardware disponible:
+        Pick the sign-detection backend based on the available hardware:
 
-          1. NPU IMX500 (`vision/imx500_detector.py`) — el modelo corre DENTRO
-             de la cámara y la CPU queda libre. Requiere el .rpk generado con
-             `tools/export_imx500.py`. Un solo objeto hace de cámara y detector.
-          2. CPU (CameraStream + SignDetector NCNN) — el camino validado.
+          1. IMX500 NPU (`vision/imx500_detector.py`) -- the model runs INSIDE
+             the camera and the CPU stays free. Requires the .rpk generated
+             with `tools/export_imx500.py`. A single object acts as camera and
+             detector.
+          2. CPU (CameraStream + SignDetector NCNN) -- the validated path.
 
-        Retorna (camera, sign_det). Si el NPU falla por lo que sea, cae al
-        camino CPU sin interrumpir el arranque.
+        Returns (camera, sign_det). If the NPU fails for any reason, it falls
+        back to the CPU path without interrupting startup.
         """
         if USE_IMX500_NPU and os.path.isfile(IMX500_RPK_PATH):
             try:
@@ -289,13 +246,13 @@ class VehicleTMR:
                     conf         = IMX500_CONF,
                     awb_warmup_s = AWB_WARMUP_S,
                 )
-                print("[VISION] Backend: NPU IMX500 (inferencia on-chip)")
+                print("[VISION] Backend: IMX500 NPU (on-chip inference)")
                 return npu, npu
             except Exception as e:
-                print(f"[VISION] NPU no disponible ({e}) — usando camino CPU.")
+                print(f"[VISION] NPU unavailable ({e}) - using the CPU path.")
         elif USE_IMX500_NPU:
-            print(f"[VISION] Sin .rpk ({IMX500_RPK_PATH}) — usando camino CPU."
-                  "  Genéralo con: python tools/export_imx500.py")
+            print(f"[VISION] No .rpk ({IMX500_RPK_PATH}) - using the CPU path."
+                  "  Generate it with: python tools/export_imx500.py")
 
         camera = CameraStream(
             width=CAMERA_W, height=CAMERA_H,
@@ -307,15 +264,14 @@ class VehicleTMR:
         print("[VISION] Backend: CPU (CameraStream + SignDetector)")
         return camera, sign_det
 
-    # ─── Arranque y bucle principal ───────────────────────────────────────────
+
 
     def run(self) -> None:
-        # Arrancar hilos de hardware y visión
         self.sensor.start()
         self.camera.start()
         self.sign_det.start()
 
-        print(f"[MAIN] Bucle de control a {LOOP_HZ} Hz iniciado.")
+        print(f"[MAIN] Control loop at {LOOP_HZ} Hz started.")
         dt = 1.0 / LOOP_HZ
         t_last = time.monotonic()
 
@@ -331,7 +287,6 @@ class VehicleTMR:
                 self._update_vision()
                 self._run_mode(dt)
 
-                # Avanzar parpadeo en CADA iteración — vale para todos los modos
                 self.signals.tick()
 
                 elapsed = time.monotonic() - now
@@ -342,28 +297,27 @@ class VehicleTMR:
         finally:
             self._shutdown()
 
-    # ─── Gamepad ─────────────────────────────────────────────────────────────
 
     def _init_gamepad(self) -> None:
         """
-        Inicializa el subsistema de joystick de pygame. La conexión real al
-        primer mando ocurre en `_pump_gamepad_events()` (vía evento
-        JOYDEVICEADDED de SDL2), así que el sistema arranca aunque el control
-        esté apagado y se enganchará automáticamente cuando se prenda.
+        Initialize pygame's joystick subsystem. The actual connection to the
+        first gamepad happens in `_pump_gamepad_events()` (via SDL2's
+        JOYDEVICEADDED event), so the system starts even if the controller is
+        off and latches onto it automatically when powered on.
         """
         try:
             import pygame
             pygame.init()
             pygame.joystick.init()
-            print("[PAD] Esperando mando — se enganchará automáticamente al prenderlo.")
+            print("[PAD] Waiting for a gamepad - it will latch on automatically when powered on.")
         except Exception as e:
-            print(f"[PAD] pygame no disponible: {e}")
+            print(f"[PAD] pygame not available: {e}")
 
     def _pump_gamepad_events(self) -> None:
         """
-        Drena la cola de eventos SDL para mantener el estado del joystick
-        actualizado y reaccionar a JOYDEVICEADDED/REMOVED.  Se llama una vez
-        por iteración del bucle principal.
+        Drain the SDL event queue to keep the joystick state up to date and
+        react to JOYDEVICEADDED/REMOVED. Called once per iteration of the
+        main loop.
         """
         try:
             import pygame
@@ -376,12 +330,12 @@ class VehicleTMR:
                     joy.init()
                     self._joystick = joy
                     self._btn_prev.clear()
-                    print(f"[PAD] Mando conectado: {joy.get_name()}")
+                    print(f"[PAD] Gamepad connected: {joy.get_name()}")
                 except Exception as e:
-                    print(f"[PAD] Error al enganchar mando: {e}")
+                    print(f"[PAD] Error latching gamepad: {e}")
             elif event.type == pygame.JOYDEVICEREMOVED:
                 if self._joystick is not None:
-                    print("[PAD] Mando desconectado — esperando reconexión...")
+                    print("[PAD] Gamepad disconnected - waiting for reconnection...")
                 self._joystick = None
                 self._btn_prev.clear()
 
@@ -394,21 +348,19 @@ class VehicleTMR:
             return
 
         def btn(idx: int) -> bool:
-            """True SOLO en el flanco de subida del botón."""
+            """True ONLY on the button's rising edge."""
             cur = bool(self._joystick.get_button(idx))
             prev = self._btn_prev.get(idx, False)
             self._btn_prev[idx] = cur
             return cur and not prev
 
-        # Emergencia — tiene prioridad absoluta
         if btn(BTN_EMERGENCY):
-            print("[PAD] EMERGENCIA — freno + MANUAL")
+            print("[PAD] EMERGENCY - brake + MANUAL")
             self.motor.brake()
             self.fsm.deactivate()
             self._set_mode(self.Mode.MANUAL)
             return
 
-        # Cuadrado / X → Toggle AUTONOMOUS
         if btn(BTN_AUTONOMOUS):
             if self._mode == self.Mode.AUTONOMOUS:
                 self.fsm.deactivate()
@@ -419,13 +371,11 @@ class VehicleTMR:
                 self.fsm.activate()
             return
 
-        # Cruz / A → MANUAL
         if btn(BTN_MANUAL):
             self.fsm.deactivate()
             self._set_mode(self.Mode.MANUAL)
             return
 
-        # Círculo / B → VISION (debug, motores OFF)
         if btn(BTN_VISION):
             if self._mode == self.Mode.VISION:
                 self._set_mode(self.Mode.MANUAL)
@@ -434,7 +384,6 @@ class VehicleTMR:
                 self._set_mode(self.Mode.VISION)
             return
 
-        # Triángulo / Y → Toggle PARKING (estacionamiento en batería)
         if btn(BTN_PARKING):
             if self._mode == self.Mode.PARKING:
                 self._set_mode(self.Mode.MANUAL)
@@ -445,7 +394,6 @@ class VehicleTMR:
                 self.parking.activate()
             return
 
-    # ─── Teclado (espejo del gamepad) ─────────────────────────────────────────
 
     def _poll_keyboard(self) -> None:
         if not self._kb.enabled:
@@ -457,18 +405,18 @@ class VehicleTMR:
     def _process_key(self, key: str) -> None:
         """
         A=MANUAL  B=VISION  X=AUTO (toggle)  P=PARKING (toggle)
-        Space=EMERG  S=STANDBY  Q=salir
-        Espacio y Q ignoran el cooldown (parada inmediata).
+        Space=EMERG  S=STANDBY  Q=quit
+        Space and Q ignore the cooldown (immediate stop).
         """
         k = key.lower()
 
         if k == "q":
-            print("\n[KB] Salida solicitada.")
+            print("\n[KB] Quit requested.")
             self._running = False
             return
 
         if key == " ":
-            print("\n[KB] EMERGENCIA — freno + MANUAL")
+            print("\n[KB] EMERGENCY - brake + MANUAL")
             self.motor.brake()
             self.fsm.deactivate()
             self._set_mode(self.Mode.MANUAL)
@@ -486,7 +434,7 @@ class VehicleTMR:
                 print("\n[KB] VISION -> MANUAL")
                 self._set_mode(self.Mode.MANUAL)
             else:
-                print("\n[KB] -> VISION (preview cámara)")
+                print("\n[KB] -> VISION (camera preview)")
                 self.motor.brake()
                 self._set_mode(self.Mode.VISION)
         elif k == "x":
@@ -504,7 +452,7 @@ class VehicleTMR:
                 print("\n[KB] PARKING -> MANUAL")
                 self._set_mode(self.Mode.MANUAL)
             else:
-                print("\n[KB] -> PARKING (estacionamiento en bateria)")
+                print("\n[KB] -> PARKING (battery parking)")
                 self.fsm.deactivate()
                 self.motor.brake()
                 self._set_mode(self.Mode.PARKING)
@@ -517,55 +465,39 @@ class VehicleTMR:
 
     def _set_mode(self, mode: str) -> None:
         if mode != self._mode:
-            print(f"[MODE] {self._mode} → {mode}")
-            # Al salir de PARKING por cualquier vía (botón, teclado,
-            # emergencia) la maniobra se cancela y el coche queda frenado.
+            print(f"[MODE] {self._mode} -> {mode}")
             if self._mode == self.Mode.PARKING:
                 self.parking.deactivate()
-            # Cerrar la ventana de debug al salir de un modo que la usa
-            # (VISION/AUTONOMOUS/PARKING) hacia uno que no (STANDBY/MANUAL).
             if (_DISPLAY and self._mode in self.DISPLAY_MODES
                     and mode not in self.DISPLAY_MODES):
                 cv2.destroyAllWindows()
-            # VISION usa el PID solo para preview — al entrar/salir lo
-            # reseteamos para que el integrador no se contamine entre modos.
             if mode == self.Mode.VISION or self._mode == self.Mode.VISION:
                 self.pid.reset()
         self._mode = mode
         self._last_mode_t = time.monotonic()
 
-    # ─── Actualización de visión (no bloqueante) ──────────────────────────────
 
     def _update_vision(self) -> None:
         """
-        Obtiene el frame más reciente y actualiza LanePipeline + SignDetector.
-        Nunca bloquea — si no hay frame nuevo, usa el resultado anterior.
+        Get the most recent frame and update LanePipeline + SignDetector.
+        Never blocks -- if there is no new frame, it uses the previous result.
         """
         frame = self.camera.get_frame()
         if frame is None:
             return
 
-        # Lane detection (rápido: ~10 ms)
         self._last_lane = self.lane_pipe.process(frame)
 
-        # Proveer frame al detector de señales (el hilo YOLO lo consumirá)
         self.sign_det.update_frame(frame)
 
-        # Actualizar entradas de la FSM
         self.fsm.lane_error   = self._last_lane.error_px
         self.fsm.lane_conf    = self._last_lane.confidence
         self.fsm.lidar_mm     = self.sensor.front_mm
 
-        # Señales que OBLIGAN a frenar: STOP y semáforo en ROJO.
-        # (green/yellow/left/right/straight NO frenan — con has_any_sign()
-        #  el carro frenaba hasta con el semáforo en VERDE. Misma lógica
-        #  que validó el simulador Sim2Real.)
         stop_like = (self.sign_det.has_sign("stop_sign")
                      or self.sign_det.has_sign("red"))
         self.fsm.sign_visible = stop_like
 
-        # Distancia a la señal de frenado más cercana (STOP o rojo),
-        # estimada por bbox — fallback si no hay lidar frontal.
         closest = (self.sign_det.closest_sign("stop_sign")
                    or self.sign_det.closest_sign("red"))
         if closest is not None and closest.distance_m is not None:
@@ -573,22 +505,20 @@ class VehicleTMR:
         else:
             self.fsm.sign_distance_mm = None
 
-        # Acción según la señal detectada (para overlay + log).
         self._sign_action = self._decide_sign_action()
 
-    # Acciones por tipo de señal (lo que el carro "hace" al verla).
     SIGN_ACTIONS = {
-        "stop_sign": "ALTO total (5 s)",
-        "red":       "Semaforo ROJO: frenar",
-        "green":     "Semaforo VERDE: avanzar",
-        "yellow":    "Semaforo AMARILLO: precaucion",
-        "left":      "Flecha IZQUIERDA",
-        "right":     "Flecha DERECHA",
-        "straight":  "Seguir RECTO",
+        "stop_sign": "Full STOP (5 s)",
+        "red":       "RED light: brake",
+        "green":     "GREEN light: go",
+        "yellow":    "YELLOW light: caution",
+        "left":      "LEFT arrow",
+        "right":     "RIGHT arrow",
+        "straight":  "Go STRAIGHT",
     }
 
     def _decide_sign_action(self) -> str:
-        """Devuelve el texto de acción de la señal más cercana detectada."""
+        """Return the action text of the closest detected sign."""
         dets = self.sign_det.get_detections()
         if not dets:
             return ""
@@ -598,7 +528,6 @@ class VehicleTMR:
         closest = min(with_dist, key=lambda d: d.distance_m)
         return self.SIGN_ACTIONS.get(closest.label, closest.label)
 
-    # ─── Modos de operación ───────────────────────────────────────────────────
 
     def _run_mode(self, dt: float) -> None:
         match self._mode:
@@ -617,12 +546,10 @@ class VehicleTMR:
                 self._do_parking(dt)
 
     def _do_parking(self, dt: float) -> None:
-        """Estacionamiento en batería — misma ParkingFSM validada en el sim."""
+        """Battery parking -- same ParkingFSM validated in the simulator."""
         self.parking.lidar_mm = self.sensor.front_mm
         self.parking.update(dt)
 
-        # Luces: hazard durante toda la maniobra; freno encendido al quedar
-        # estacionado (coche detenido = misma señalización que ESPERA).
         self.signals.set_mode(SignalMode.HAZARD)
         if self.parking.state == ParkingState.PARKED:
             self.brake_light.on()
@@ -637,16 +564,16 @@ class VehicleTMR:
             self._render_debug_view(mode_label="PARK")
 
     def _log_autonomous(self) -> None:
-        """Línea de status del modo autónomo — incluye lo que ve YOLO."""
+        """Autonomous-mode status line -- includes what YOLO sees."""
         dets = self.sign_det.get_detections()
         if dets:
             sign_txt = ", ".join(
                 f"{d.label}@{(d.distance_m or 0)*100:.0f}cm" for d in dets[:2]
             )
         else:
-            sign_txt = "—"
+            sign_txt = "-"
         lidar_txt = f"{self.sensor.front_mm:.0f}" if self.sensor.front_mm else "---"
-        action = self._sign_action or "—"
+        action = self._sign_action or "-"
         print(f"\r[AUT] {self.fsm.state.name:<10}  "
               f"err:{self._last_lane.error_px:+5.0f}px  "
               f"angle:{self.steering.current_angle:5.1f}°  "
@@ -661,7 +588,6 @@ class VehicleTMR:
         self.brake_light.off()
         if self._joystick is None:
             return
-        # En STANDBY: cualquier botón activa MANUAL
         try:
             import pygame
             pygame.event.pump()
@@ -673,20 +599,17 @@ class VehicleTMR:
             pass
 
     def _do_manual(self) -> None:
-        """Control manual: palanca izquierda X → servo | R2 → avance | L2 → reversa."""
+        """Manual control: left stick X -> servo | R2 -> forward | L2 -> reverse."""
         if self._joystick is None:
             self.motor.brake()
             return
 
-        # Dirección — la inversión física del servo se maneja en SteeringDriver,
-        # aquí trabajamos en el sistema lógico (joystick izq = ángulo < 90).
         steer_raw = self._joystick.get_axis(AXIS_STEER)
         if abs(steer_raw) < DEADBAND:
             steer_raw = 0.0
         angle = SERVO_CENTER + steer_raw * (SERVO_CENTER - SERVO_MIN)
         self.steering.set_angle(angle)
 
-        # Direccionales según dirección del giro (umbral alto para ignorar drift)
         if   steer_raw < -0.30:
             self.signals.set_mode(SignalMode.LEFT)
         elif steer_raw > +0.30:
@@ -694,37 +617,31 @@ class VehicleTMR:
         else:
             self.signals.set_mode(SignalMode.OFF)
 
-        # Velocidad
-        throttle = self._joystick.get_axis(AXIS_THROTTLE)   # −1=suelto, +1=fondo
-        brake    = self._joystick.get_axis(AXIS_BRAKE)      # −1=suelto, +1=fondo
+        throttle = self._joystick.get_axis(AXIS_THROTTLE)
+        brake    = self._joystick.get_axis(AXIS_BRAKE)
 
-        # Normalizar triggers: (valor + 1) / 2 ∈ [0, 1]
         t = (throttle + 1.0) / 2.0
         b = (brake    + 1.0) / 2.0
 
         if b > DEADBAND:
-            # Reversa suave (máx 40%)
             self.motor.set_speed(-(b ** 2) * 40.0)
         elif t > DEADBAND:
-            # Avance con soft-start implícito en MotorDriver
-            self.motor.set_speed((t ** 1.3) * 55.0)   # máx 55% en manual
+            self.motor.set_speed((t ** 1.3) * 55.0)
         else:
-            self.motor.set_speed(0.0)   # rueda libre (no freno)
+            self.motor.set_speed(0.0)
 
-        # Luz de freno: encendida sólo cuando hay reversa activa
         if self.motor.current_duty < -1.0:
             self.brake_light.on()
         else:
             self.brake_light.off()
 
-        # Log con detecciones YOLO (lo que ve el carro)
         dets = self.sign_det.get_detections()
         if dets:
             sign_txt = ", ".join(
                 f"{d.label}@{(d.distance_m or 0)*100:.0f}cm" for d in dets[:2]
             )
         else:
-            sign_txt = "—"
+            sign_txt = "-"
 
         print(f"\r[MAN] steer:{steer_raw:+.2f} ({angle:.0f}°)  "
               f"t:{t:.2f}  b:{b:.2f}  duty:{self.motor.current_duty:+.0f}%  "
@@ -732,7 +649,7 @@ class VehicleTMR:
               end="", flush=True)
 
     def _do_vision(self, dt: float) -> None:
-        """Debug de visión — motores OFF, muestra pipeline + PID en pantalla."""
+        """Vision debug -- motors OFF, shows the pipeline + PID on screen."""
         self.motor.brake()
         self.steering.center()
         self.signals.set_mode(SignalMode.OFF)
@@ -741,17 +658,13 @@ class VehicleTMR:
         if self.camera.get_frame() is None:
             return
 
-        # PID — solo simulación. El servo NO se mueve; ya quedó en center().
-        # En AUTONOMOUS la FSM calcula el PID; aquí lo hacemos a mano para
-        # poder visualizarlo igualmente.
         self.pid.compute(self._last_lane.error_px, dt)
 
         if _DISPLAY:
             self._render_debug_view(mode_label="VIS")
 
-        # Log a consola siempre (con --display y sin él).
         dets = self.sign_det.get_detections()
-        sign_txt = ", ".join(f"{d.label}({d.confidence:.0%})" for d in dets) or "—"
+        sign_txt = ", ".join(f"{d.label}({d.confidence:.0%})" for d in dets) or "-"
         lidar_txt = f"{self.sensor.front_mm:.0f}" if self.sensor.front_mm else "---"
         angle_target = max(
             SERVO_MIN, min(SERVO_MAX, SERVO_CENTER + self.pid.last_output)
@@ -764,19 +677,18 @@ class VehicleTMR:
               f"signs:{sign_txt}   ",
               end="", flush=True)
 
-    # ─── Render compartido (VISION + AUTONOMOUS + PARKING) ────────────────────
 
     def _render_debug_view(self, mode_label: str) -> None:
         """
-        Dibuja una sola ventana con TODO el debug visual:
-          • Frame anotado con la línea central del carril detectado.
-          • Mosaico superior: BEV (vista cenital) + máscara HSV.
-          • Bounding boxes de YOLO con etiqueta + confianza + distancia.
-          • Panel inferior izquierdo: valores PID (P/I/D/corr) y error.
-          • Panel inferior derecho: objetos detectados + acción de la señal.
+        Draw a single window with ALL the visual debug:
+          - Frame annotated with the detected lane centre line.
+          - Top mosaic: BEV (top-down view) + HSV mask.
+          - YOLO bounding boxes with label + confidence + distance.
+          - Bottom-left panel: PID values (P/I/D/corr) and error.
+          - Bottom-right panel: detected objects + sign action.
 
-        Llamado desde VISION, AUTONOMOUS y PARKING cuando --display está
-        activo. No bloquea: cv2.waitKey(1).
+        Called from VISION, AUTONOMOUS and PARKING when --display is active.
+        Non-blocking: cv2.waitKey(1).
         """
         frame = self.camera.get_frame()
         if frame is None:
@@ -786,25 +698,22 @@ class VehicleTMR:
         dets  = self.sign_det.get_detections()
         lidar = self.sensor.front_mm
 
-        # Frame con línea central del carril dibujada por el pipeline.
         vis = self.lane_pipe.draw_debug(frame, lane)
 
-        # ── Mosaico BEV + máscara (ojo de águila + filtro) ──
         if lane.bev_frame is not None and lane.mask_frame is not None:
             vis[0:180, 0:320]   = cv2.resize(lane.bev_frame,  (320, 180))
             vis[0:180, 320:640] = cv2.resize(lane.mask_frame, (320, 180))
-            cv2.putText(vis, "BEV (ojo de aguila)", (8, 14),
+            cv2.putText(vis, "BEV (bird's-eye)", (8, 14),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-            cv2.putText(vis, "Mascara HSV blanco",   (328, 14),
+            cv2.putText(vis, "HSV white mask",   (328, 14),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
         angle_target = max(
             SERVO_MIN, min(SERVO_MAX, SERVO_CENTER + self.pid.last_output)
         )
 
-        # ── Panel inferior izquierdo: PID + error ──
         self._draw_panel(vis, x=8, y=200, w=320, h=160, lines=[
-            f"MODO  : {mode_label}",
+            f"MODE  : {mode_label}",
             f"err   :{lane.error_px:+7.1f}px  conf:{lane.confidence:.0%}",
             f"P     :{self.pid.last_p:+7.2f}   kp={self.pid.kp:.3f}",
             f"I     :{self.pid.last_i:+7.2f}   ki={self.pid.ki:.3f}",
@@ -813,19 +722,17 @@ class VehicleTMR:
             f"lidar :{lidar:.0f}mm" if lidar else "lidar :---",
         ])
 
-        # ── Panel inferior derecho: objetos detectados + acción ──
         if dets:
-            obj_lines = ["OBJETOS DETECTADOS:"]
+            obj_lines = ["DETECTED OBJECTS:"]
             for d in dets[:4]:
                 dist = f" @{(d.distance_m or 0)*100:.0f}cm" if d.distance_m else ""
                 obj_lines.append(f"- {d.label}  {d.confidence:.0%}{dist}")
             if self._sign_action:
                 obj_lines.append(f"-> {self._sign_action}")
         else:
-            obj_lines = ["OBJETOS DETECTADOS:", "- (ninguno)"]
+            obj_lines = ["DETECTED OBJECTS:", "- (none)"]
         self._draw_panel(vis, x=336, y=200, w=296, h=160, lines=obj_lines)
 
-        # ── Estado FSM en la barra inferior (conducción o parking) ──
         try:
             if self._mode == self.Mode.PARKING:
                 fsm_txt = f"FSM:{self.parking.state.name}"
@@ -837,7 +744,6 @@ class VehicleTMR:
                     (8, CAMERA_H - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2, cv2.LINE_AA)
 
-        # ── Bounding boxes YOLO (AL FINAL: siempre encima de mosaico + paneles) ──
         for d in dets:
             cv2.rectangle(vis, (d.x1, d.y1), (d.x2, d.y2), (0, 255, 0), 2)
             dist_txt = f" {(d.distance_m or 0)*100:.0f}cm" if d.distance_m else ""
@@ -854,7 +760,7 @@ class VehicleTMR:
 
     @staticmethod
     def _draw_panel(img, x: int, y: int, w: int, h: int, lines: list[str]) -> None:
-        """Caja semitransparente con texto multi-línea."""
+        """Semi-transparent box with multi-line text."""
         ov = img.copy()
         cv2.rectangle(ov, (x, y), (x + w, y + h), (0, 0, 0), -1)
         cv2.addWeighted(ov, 0.55, img, 0.45, 0, dst=img)
@@ -864,14 +770,13 @@ class VehicleTMR:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                         (255, 220, 0), 1, cv2.LINE_AA)
 
-    # ─── Apagado limpio ───────────────────────────────────────────────────────
 
     def _handle_signal(self, signum, _frame) -> None:
-        print(f"\n[SYS] Señal {signum} recibida → apagando...")
+        print(f"\n[SYS] Signal {signum} received -> shutting down...")
         self._running = False
 
     def _shutdown(self) -> None:
-        print("\n[SYS] Apagando sistema...")
+        print("\n[SYS] Shutting down the system...")
         try:    self._kb.close()
         except: pass
         if _DISPLAY:
@@ -888,10 +793,9 @@ class VehicleTMR:
         try:    self.brake_light.close()
         except: pass
         self.motor.cleanup()
-        print("[SYS] Apagado completado.")
+        print("[SYS] Shutdown complete.")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     _release_gpio_from_systemd()
     VehicleTMR().run()

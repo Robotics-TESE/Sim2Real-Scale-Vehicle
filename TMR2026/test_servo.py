@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """test_servo.py — Prueba directa del servo en PCA9685."""
 
 from adafruit_extended_bus import ExtendedI2C

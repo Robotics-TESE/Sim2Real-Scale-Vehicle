@@ -1,6 +1,6 @@
-# Setup — Carrito TMR 2026
+# Setup — Sim2Real Scale Vehicle (TMR 2026)
 
-## 1. Instalar dependencias del sistema
+## 1. Install system dependencies
 
 ```bash
 sudo apt update && sudo apt install -y \
@@ -17,74 +17,74 @@ pip3 install --break-system-packages \
   opencv-python-headless
 ```
 
-## 2. Habilitar el bus I²C alternativo (GPIO 0 / GPIO 1)
+## 2. Enable the alternative I²C bus (GPIO 0 / GPIO 1)
 
-Agregar al final de `/boot/firmware/config.txt`:
+Append to the end of `/boot/firmware/config.txt`:
 
 ```
 dtoverlay=i2c-gpio,bus=3,i2c_gpio_sda=0,i2c_gpio_scl=1,i2c_gpio_delay_us=2
 ```
 
-Reiniciar y verificar: `ls /dev/i2c-*` → debe aparecer `/dev/i2c-3`
+Reboot and verify: `ls /dev/i2c-*` -> `/dev/i2c-3` should appear.
 
-## 3. Cargar el modelo YOLOv8 en el IMX500
+## 3. Load the YOLOv8 model into the IMX500
 
 ```bash
-# Verificar modelos disponibles
+# Check the available models
 ls /usr/share/imx500-models/
 
-# El archivo esperado es:
+# The expected file is:
 # /usr/share/imx500-models/imx500_network_yolov8n_pp.rpk
-# Si tiene otro nombre, actualizar IMX500_MODEL_PATH en config.py
+# If it has a different name, update IMX500_MODEL_PATH in config.py
 ```
 
-## 4. Configurar Bluetooth del mando
+## 4. Configure the gamepad Bluetooth
 
 ```bash
 bluetoothctl
   power on
   agent on
   scan on
-  # Poner el mando en modo pairing (mantener PS/Xbox + Share)
+  # Put the gamepad in pairing mode (hold PS/Xbox + Share)
   pair XX:XX:XX:XX:XX:XX
   trust XX:XX:XX:XX:XX:XX
   connect XX:XX:XX:XX:XX:XX
   exit
 ```
 
-Para que se conecte automáticamente al encender la Pi, el mando debe
-estar en la lista de dispositivos "trusted".
+For it to connect automatically when the Pi powers on, the gamepad must be in
+the "trusted" device list.
 
-## 5. Instalar el servicio systemd
+## 5. Install the systemd service
 
 ```bash
-# Copiar el archivo al directorio de systemd
+# Copy the file to the systemd directory
 sudo cp /home/pi/carrito_tmr/systemd/carrito_tmr.service \
         /etc/systemd/system/
 
-# Recargar, habilitar y arrancar
+# Reload, enable and start
 sudo systemctl daemon-reload
 sudo systemctl enable carrito_tmr
 sudo systemctl start  carrito_tmr
 
-# Ver logs en tiempo real
+# Watch the logs in real time
 journalctl -u carrito_tmr -f
 ```
 
-## 6. Comandos útiles en operación
+## 6. Useful commands during operation
 
 ```bash
-# Ver estado
+# Check status
 sudo systemctl status carrito_tmr
 
-# Detener manualmente (útil para depurar)
+# Stop manually (useful for debugging)
 sudo systemctl stop carrito_tmr
 
-# Ejecutar manualmente sin servicio (para ver prints en terminal)
+# Run manually without the service (to see prints in the terminal)
 cd /home/pi/carrito_tmr
 python3 main.py
 
-# Solo debug de visión sin arrancar servicio
+# Vision debug only, without starting the service
 python3 -c "
 from hardware.camera_manager import CameraManager
 from vision.lane_detector import LaneDetector
@@ -100,43 +100,43 @@ while True:
 "
 ```
 
-## 7. Calibración en pista
+## 7. On-track calibration
 
-| Parámetro | Archivo | Qué ajustar |
-|-----------|---------|-------------|
-| `CAMERA_FOCAL_LENGTH_PX` | config.py | Medir con tablero de ajedrez o señal STOP a distancia conocida |
-| `STEER_KP/KI/KD` | config.py | Aumentar Kp hasta que oscile, luego dividir a la mitad |
-| `PARK_OVERSHOOT_SEC` | config.py | Cronometrar cuánto tarda en pasar el espacio de 60 cm |
-| `PARK_REVERSE_LOCK_SEC` | config.py | Ajustar hasta que el arco sea de ~90° |
-| `SPEED_STRAIGHT / SPEED_CURVE` | config.py | Velocidad máxima sin que las imágenes salgan movidas |
-| `threshold` en LaneDetector | lane_detector.py | Ajustar según iluminación de la pista |
+| Parameter | File | What to adjust |
+|-----------|------|----------------|
+| `CAMERA_FOCAL_LENGTH_PX` | config.py | Measure with a chessboard or a STOP sign at a known distance |
+| `STEER_KP/KI/KD` | config.py | Increase Kp until it oscillates, then halve it |
+| `PARK_OVERSHOOT_SEC` | config.py | Time how long it takes to pass the 60 cm gap |
+| `PARK_REVERSE_LOCK_SEC` | config.py | Adjust until the arc is ~90 deg |
+| `SPEED_STRAIGHT / SPEED_CURVE` | config.py | Max speed without motion-blurred images |
+| `threshold` in LaneDetector | lane_detector.py | Adjust for the track lighting |
 
-## 8. Estructura del proyecto
+## 8. Project structure
 
 ```
 TMR2026/
-├── main.py                   ← Punto de entrada (Raspberry Pi, bucle 50 Hz)
-├── main_simulator.py         ← Gemelo digital (Unity / Sim2Real)
-├── config.py                 ← TODOS los parámetros
+├── main.py                   ← Entry point (Raspberry Pi, 50 Hz loop)
+├── main_simulator.py         ← Digital twin (Unity / Sim2Real)
+├── config.py                 ← ALL parameters
 ├── requirements.txt
-├── docs/                     ← SETUP, Sim2Real, calibración, entregas
+├── docs/                     ← SETUP, Sim2Real, calibration, deliveries
 ├── hardware/
-│   ├── motor.py              ← IBT-2 soft-start (ACTIVO; RPWM=18, LPWM=13)
-│   ├── steering_driver.py    ← PCA9685 + MG90s + geometría Ackermann
-│   ├── distance_sensor.py    ← VL53L0X hilo dedicado
-│   ├── signals.py            ← Direccionales / hazard (2 Hz)
-│   └── brake_light.py        ← Luz de freno
+│   ├── motor.py              ← IBT-2 soft-start (ACTIVE; RPWM=18, LPWM=13)
+│   ├── steering_driver.py    ← PCA9685 + MG90s + Ackermann geometry
+│   ├── distance_sensor.py    ← VL53L0X dedicated thread
+│   ├── signals.py            ← Turn signals / hazard (2 Hz)
+│   └── brake_light.py        ← Brake light
 ├── control/
-│   ├── fsm.py                ← FSM de conducción (5 estados)
-│   ├── parking_fsm.py        ← Estacionamiento en batería
-│   └── pid_controller.py     ← PID genérico con anti-windup
+│   ├── fsm.py                ← Driving FSM (5 states)
+│   ├── parking_fsm.py        ← Battery parking
+│   └── pid_controller.py     ← Generic anti-windup PID
 ├── vision/
-│   ├── camera_stream.py      ← Picamera2 RGB→BGR (hilo)
-│   ├── lane_pipeline.py      ← BEV + HSV + sliding windows (ACTIVO)
-│   └── sign_detector.py      ← YOLOv8n + respaldo por color (ACTIVO)
-├── autonomy/                 ← Implementaciones alternativas (no conectadas)
-├── tests/                    ← pytest (FSM, señales, histéresis)
-├── tools/                    ← test_camera.py, captura, evaluación YOLO
+│   ├── camera_stream.py      ← Picamera2 RGB→BGR (thread)
+│   ├── lane_pipeline.py      ← BEV + HSV + sliding windows (ACTIVE)
+│   └── sign_detector.py      ← YOLOv8n + color fallback (ACTIVE)
+├── autonomy/                 ← Alternative implementations (not wired in)
+├── tests/                    ← pytest (FSM, signals, hysteresis)
+├── tools/                    ← test_camera.py, capture, YOLO evaluation
 └── systemd/
-    └── carrito_tmr.service   ← Auto-arranque en boot
+    └── carrito_tmr.service   ← Auto-start on boot
 ```

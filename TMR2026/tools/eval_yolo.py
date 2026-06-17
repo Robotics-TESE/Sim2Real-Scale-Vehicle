@@ -165,7 +165,6 @@ def main() -> None:
             for k, v in fp.items(): fp_t[k] += v
             for k, v in fn.items(): fn_t[k] += v
 
-        # stop primero porque es la única clase activa en main.py
         cls_order = [4, 0, 1, 2, 3, 5, 6]
         for c in cls_order:
             tp = tp_t[c]; fp = fp_t[c]; fn = fn_t[c]

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 test_vision.py — Visualización 4 paneles del módulo de visión TMR 2026.
 
@@ -36,16 +35,10 @@ from vision_module import (
     _ROI_Y0, _ROI_Y1, _THRESH, _MORPH_K,
 )
 
-# ── Tamaños de panel ─────────────────────────────────────────────────────────
-P_W = 640   # ancho de cada panel
-P_H = 360   # alto del panel inferior (main stream escalado)
-Y_H = 480   # alto del panel Y plane / máscara (resolución lores nativa)
+P_W = 640
+P_H = 360
+Y_H = 480
 
-# El canvas final: 2 columnas × 2 filas
-# Fila superior: Y plane (640×480) | máscara (640×480)
-# Fila inferior: main+bboxes (640×360) | FPS graph (640×360)
-# Ajustamos la fila superior a 360px de alto recortando (crop central) para
-# que el canvas sea uniforme. El Y plane se muestra completo (scroll visual).
 CANVAS_W = P_W * 2
 CANVAS_H = P_H * 2
 
@@ -76,9 +69,7 @@ def _panel_y_plane(y_plane: np.ndarray) -> np.ndarray:
     """Panel TL: plano Y a color falso — escala de grises como BGR."""
     if y_plane is None:
         return np.zeros((P_H, P_W, 3), dtype=np.uint8)
-    # Convertir a BGR para poder poner texto de color
     panel = cv2.cvtColor(cv2.resize(y_plane, (P_W, P_H)), cv2.COLOR_GRAY2BGR)
-    # Línea ROI
     roi0 = int(_ROI_Y0 * P_H / _LORES_H)
     roi1 = int(_ROI_Y1 * P_H / _LORES_H)
     cv2.line(panel, (0, roi0), (P_W, roi0), (0, 200, 200), 1)
@@ -96,13 +87,11 @@ def _panel_mask(y_plane: np.ndarray) -> np.ndarray:
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (_MORPH_K, _MORPH_K))
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
 
-    # Crear imagen completa con ROI en su posición
     full = np.zeros((_LORES_H, _LORES_W), dtype=np.uint8)
     full[_ROI_Y0:_ROI_Y1, :] = binary
 
     panel = cv2.cvtColor(cv2.resize(full, (P_W, P_H)), cv2.COLOR_GRAY2BGR)
 
-    # Histograma de columnas (barra verde en la parte inferior del panel)
     hist = np.sum(binary, axis=0).astype(np.float32)
     if hist.max() > 0:
         hist_norm = (hist / hist.max() * 60).astype(int)
@@ -126,7 +115,6 @@ def _panel_main(frame, vs, lane_error: float, lane_conf: float) -> np.ndarray:
     sx = P_W / _MAIN_W
     sy = P_H / _MAIN_H
 
-    # Bboxes NPU
     for det in vs.raw_detections:
         c = _COLORS.get(det.label, (180, 180, 180))
         x1, y1 = int(det.x1*sx), int(det.y1*sy)
@@ -134,14 +122,12 @@ def _panel_main(frame, vs, lane_error: float, lane_conf: float) -> np.ndarray:
         cv2.rectangle(panel, (x1, y1), (x2, y2), c, 2)
         _put(panel, f"{det.label} {det.confidence:.0%}", (x1, max(y1-4, 12)), c)
 
-    # Línea de carril (error en coords lores 640px = coords P_W)
     mid   = P_W // 2
     cx    = max(0, min(P_W-1, mid + int(lane_error)))
     col   = (0, 255, 0) if lane_conf >= 0.30 else (0, 60, 255)
     cv2.line(panel, (mid, P_H), (mid, P_H//2), (0, 150, 150), 1)
     cv2.line(panel, (cx,  P_H), (cx,  P_H//2), col, 2)
 
-    # FSM state
     fsm_col = _FSM_COLOR.get(vs.fsm_state, (200, 200, 200))
     _put(panel, vs.fsm_state.name, (8, 20), fsm_col, 0.55, 2)
     _put(panel, f"err:{lane_error:+.0f}px  conf:{lane_conf:.0%}",
@@ -163,13 +149,11 @@ def _panel_fps(fps_history: list) -> np.ndarray:
     max_fps = max(fps_history) if max(fps_history) > 0 else 30
     step_x = P_W / max(n, 1)
 
-    # Grid líneas en 15 y 25 FPS (umbrales de reset y warn)
     for fps_line, color in [(15, (0, 50, 200)), (25, (0, 150, 100)), (30, (60, 60, 60))]:
         y = int(P_H - (fps_line / max_fps) * (P_H - 30))
         cv2.line(panel, (0, y), (P_W, y), color, 1)
         _put(panel, str(fps_line), (P_W - 28, y - 2), color, 0.4)
 
-    # Curva de FPS
     pts = []
     for i, f in enumerate(fps_history):
         x = int(i * step_x)
@@ -191,7 +175,7 @@ def main():
     vm.start()
 
     fps_history: list[float] = []
-    MAX_HIST = 120  # 4 s @ 30 FPS
+    MAX_HIST = 120
 
     print("test_vision.py iniciado — Q/Esc=salir  R=recalibrar")
 
@@ -210,7 +194,6 @@ def main():
             p_bl = _panel_main(frame, vs, vs.lane_error, vs.lane_confidence)
             p_br = _panel_fps(fps_history)
 
-            # Ajustar alturas para canvas uniforme (P_H × P_W cada panel)
             def to_ph(img):
                 h, w = img.shape[:2]
                 if h != P_H:
@@ -221,7 +204,6 @@ def main():
             row_bot = np.hstack([to_ph(p_bl), to_ph(p_br)])
             canvas  = np.vstack([row_top, row_bot])
 
-            # Líneas divisorias
             cv2.line(canvas, (P_W, 0), (P_W, CANVAS_H), (60, 60, 60), 1)
             cv2.line(canvas, (0, P_H), (CANVAS_W, P_H), (60, 60, 60), 1)
 
@@ -233,7 +215,7 @@ def main():
                 print("[TEST] Recalibrando AE/AWB...")
                 vm.recalibrate_lighting()
 
-            time.sleep(0.01)  # cede CPU — la captura ocurre en hilo separado
+            time.sleep(0.01)
 
     except KeyboardInterrupt:
         pass

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 lane_detector.py — Detección de carril con OpenCV.
 
@@ -32,13 +31,13 @@ from config import (
 
 @dataclass
 class LaneData:
-    error_px: float        # + = coche a la izquierda del carril, − = a la derecha
-    curvature_rad: float   # curvatura estimada (abs)
-    is_curve: bool         # True si la curvatura supera el umbral
-    confidence: float      # [0, 1] — qué tan buena es la detección
-    suggested_speed: float # % PWM sugerido según curvatura
-    crosswalk_detected: bool = False       # True si hay crucero peatonal al frente
-    debug_image: np.ndarray | None = None  # frame anotado (solo en modo test)
+    error_px: float
+    curvature_rad: float
+    is_curve: bool
+    confidence: float
+    suggested_speed: float
+    crosswalk_detected: bool = False
+    debug_image: np.ndarray | None = None
 
 
 class LaneDetector:
@@ -59,8 +58,8 @@ class LaneDetector:
         n_windows: int = 6,
         debug: bool = False,
     ):
-        self.roi_top_ratio  = roi_top_ratio   # ROI empieza aquí (ej. 55% del alto)
-        self.roi_near_ratio = roi_near_ratio  # banda cercana (ej. 80%)
+        self.roi_top_ratio  = roi_top_ratio
+        self.roi_near_ratio = roi_near_ratio
         self.threshold      = threshold
         self.n_windows      = n_windows
         self.debug          = debug
@@ -69,9 +68,6 @@ class LaneDetector:
         self._H = CAMERA_HEIGHT
         self._mid = self._W // 2
 
-    # ----------------------------------------------------------
-    # API pública
-    # ----------------------------------------------------------
     def process(self, frame: np.ndarray) -> LaneData:
         """
         Procesa un frame BGR y devuelve LaneData.
@@ -88,7 +84,6 @@ class LaneDetector:
         roi_top  = int(self._H * self.roi_top_ratio)
         roi_near = int(self._H * self.roi_near_ratio)
 
-        # Extraer bandas: lejana (arriba del ROI) y cercana (abajo del ROI)
         far_band  = binary[roi_top  : roi_near, :]
         near_band = binary[roi_near :          , :]
 
@@ -97,22 +92,18 @@ class LaneDetector:
 
         confidence = (conf_far + conf_near) / 2.0
 
-        # Error: positivo = coche a la izquierda del carril (debe girar derecha)
         error_px = cx_near - self._mid
 
-        # Curvatura como el cambio de eje x entre banda cercana y lejana
         far_height  = roi_near - roi_top
         near_height = self._H - roi_near
-        dy = far_height + near_height / 2  # distancia vertical aproximada en px
+        dy = far_height + near_height / 2
         curvature_rad = math.atan2(abs(cx_near - cx_far), dy) if dy > 0 else 0.0
 
         is_curve = curvature_rad > CURVE_THRESHOLD_RAD
 
-        # Velocidad sugerida: lineal entre SPEED_CURVE y SPEED_STRAIGHT
         t = min(curvature_rad / CURVE_THRESHOLD_RAD, 1.0) if CURVE_THRESHOLD_RAD > 0 else 0
         suggested_speed = SPEED_STRAIGHT * (1 - t) + SPEED_CURVE * t
 
-        # Si el carril está muy perdido, reducir confianza y velocidad
         if abs(error_px) > LANE_LOST_THRESHOLD_PX:
             confidence = 0.0
             suggested_speed = SPEED_CURVE
@@ -136,9 +127,6 @@ class LaneDetector:
             debug_image       = debug_img,
         )
 
-    # ----------------------------------------------------------
-    # Detección de centro de carril en una banda
-    # ----------------------------------------------------------
     def _find_lane_center(self, band: np.ndarray) -> tuple[float, float]:
         """
         Localiza la línea izquierda y derecha en `band` usando ventana
@@ -150,7 +138,6 @@ class LaneDetector:
         if band.size == 0:
             return float(self._mid), 0.0
 
-        # Histograma de columnas en la banda
         col_sum = np.sum(band, axis=0).astype(np.float32)
 
         mid = self._W // 2
@@ -166,10 +153,9 @@ class LaneDetector:
                 left_half[left_peak]  / (band.shape[0] * 255),
                 right_half[right_peak - mid] / (band.shape[0] * 255)
             )
-            confidence = min(confidence * 5.0, 1.0)  # normalizar
+            confidence = min(confidence * 5.0, 1.0)
         elif left_peak is not None:
-            # Solo línea izquierda detectada — estimar derecha
-            center = left_peak + self._W * 0.35  # ancho típico del carril
+            center = left_peak + self._W * 0.35
             confidence = 0.4
         elif right_peak is not None:
             center = right_peak - self._W * 0.35
@@ -180,9 +166,6 @@ class LaneDetector:
 
         return center, confidence
 
-    # ----------------------------------------------------------
-    # Detección de crucero peatonal
-    # ----------------------------------------------------------
     def _detect_crosswalk(self, binary: np.ndarray, roi_top: int) -> bool:
         """
         Detecta un crucero peatonal (líneas blancas horizontales anchas).
@@ -193,9 +176,8 @@ class LaneDetector:
 
         Se requieren al menos 3 filas consecutivas para evitar falsos positivos.
         """
-        # Zona de búsqueda: entre el 30% y el 55% de la altura del frame
         search_top    = int(self._H * 0.30)
-        search_bottom = roi_top   # justo antes del ROI de carril
+        search_bottom = roi_top
 
         if search_bottom <= search_top:
             return False
@@ -204,13 +186,10 @@ class LaneDetector:
         if zone.size == 0:
             return False
 
-        # Proporción de píxeles blancos por fila
         row_ratios = np.sum(zone > 0, axis=1) / self._W
 
-        # Filas con alta densidad de blanco
         white_rows = row_ratios > CROSSWALK_WHITE_RATIO
 
-        # Necesitamos al menos 3 filas consecutivas
         consecutive = 0
         for w in white_rows:
             if w:
@@ -221,23 +200,17 @@ class LaneDetector:
                 consecutive = 0
         return False
 
-    # ----------------------------------------------------------
-    # Visualización de debug
-    # ----------------------------------------------------------
     def _draw_debug(
         self, frame, binary, roi_top, roi_near,
         cx_near, cx_far, error_px
     ) -> np.ndarray:
         vis = frame.copy()
 
-        # ROI boundaries
         cv2.line(vis, (0, roi_top),  (self._W, roi_top),  (0, 200, 200), 1)
         cv2.line(vis, (0, roi_near), (self._W, roi_near), (0, 200, 200), 1)
 
-        # Línea de centro
         cv2.line(vis, (self._mid, roi_top), (self._mid, self._H), (200, 200, 0), 1)
 
-        # Centro detectado
         cy_near = int((self._H + roi_near) / 2)
         cy_far  = int((roi_top + roi_near) / 2)
         cv2.circle(vis, (int(cx_near), cy_near), 6, (0, 255, 0), -1)

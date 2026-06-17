@@ -14,15 +14,6 @@ Uso:
 import sys
 import time
 
-# Pines LED en uso en TODO el repo (cableado actual + históricos):
-#   17      → direccional IZQ (Pin 11) — actual
-#    5      → direccional DER (Pin 29) — actual
-#    6      → freno           (Pin 31) — actual
-#   19, 20  → direccionales antiguas (signals.py viejo / vision_config.yaml)
-#   16      → freno antiguo (brake_light.py viejo)
-#   25, 26  → PIN_LED_STOP / PIN_LED_STATUS (legacy, definidos en config.py)
-# Cubrimos histórico + actual para que el script siga funcionando como
-# botón de pánico aunque haya basura residual de configuraciones previas.
 LED_PINS = [5, 6, 16, 17, 19, 20, 25, 26]
 
 
@@ -34,7 +25,7 @@ def main() -> int:
         return 1
 
     try:
-        handle = lgpio.gpiochip_open(4)   # Pi 5 chip 4
+        handle = lgpio.gpiochip_open(4)
     except Exception as e:
         print(f"ERROR abriendo gpiochip 4: {e}")
         return 1

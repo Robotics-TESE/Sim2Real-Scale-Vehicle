@@ -1,16 +1,14 @@
-# -*- coding: utf-8 -*-
-"""
-sim_hardware_mocks.py — Mocks de Hardware para Sim2Real (PC ↔ Raspberry Pi)
+"""Hardware mocks for Sim2Real (PC <-> Raspberry Pi).
 
-Reemplaza dependencias de Pi (lgpio, picamera2, smbus2) con sockets TCP/UDP.
-Permite que el código TMR2026 corra en PC conectado a simulador Unity.
+Replaces the Pi dependencies (lgpio, picamera2, smbus2) with TCP/UDP sockets,
+so the TMR2026 code can run on a PC connected to the Unity simulator.
 
-Uso:
+Usage:
     from sim_hardware_mocks import SimulatorClient
 
     sim = SimulatorClient(host='127.0.0.1', port=5005)
-    sim.motor.set_speed(50.0)  # % PWM
-    sim.steering.set_angle(90.0)  # grados
+    sim.motor.set_speed(50.0)     # % PWM
+    sim.steering.set_angle(90.0)  # degrees
     distance_mm = sim.distance.front_mm
     frame = sim.camera.get_latest_frame()
 """
@@ -25,19 +23,15 @@ import io
 from typing import Optional
 from collections import deque
 
-# Forzar UTF-8 en la consola (Windows cp1252 crashea con ✓ ✗ → etc.)
 try:
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 except Exception:
     pass
 
-# ============================================================================
-# MOCKS DE HARDWARE
-# ============================================================================
 
 class MockMotorDriver:
-    """Reemplaza: hardware/motor.py"""
+    """Replaces: hardware/motor.py"""
 
     def __init__(self, socket_client):
         self.socket = socket_client
@@ -46,8 +40,8 @@ class MockMotorDriver:
 
     def set_speed(self, duty_percent: float):
         """
-        Envía comando PWM al simulador.
-        duty_percent: [-100, 100] (negativo = reversa, positivo = avance)
+        Send a PWM command to the simulator.
+        duty_percent: [-100, 100] (negative = reverse, positive = forward)
         """
         duty_percent = max(-100, min(100, duty_percent))
         with self._lock:
@@ -57,26 +51,25 @@ class MockMotorDriver:
             msg = f"MOTOR:{duty_percent:.2f}\n".encode()
             self.socket.sendall(msg)
         except Exception as e:
-            print(f"[MockMotor] Error enviando PWM: {e}")
+            print(f"[MockMotor] Error sending PWM: {e}")
 
     def brake(self):
-        """Freno inmediato (duty = 0)"""
+        """Instantaneous brake (duty = 0)."""
         self.set_speed(0.0)
 
     def stop(self):
-        """Alias de brake()"""
+        """Alias for brake()."""
         self.brake()
 
 
 class MockSteeringDriver:
-    """Reemplaza: hardware/steering_driver.py.
+    """Replaces: hardware/steering_driver.py.
 
-    Replica la inversión física del Pi: el servo del carro está montado al
-    revés, y config.STEERING_INVERTED lo compensa. Para que el simulador se
-    comporte IGUAL que el carro real, aplicamos la misma inversión antes de
-    mandar el ángulo a Unity. current_angle sigue siendo el LÓGICO."""
+    Replicates the Pi's physical inversion: the car's servo is mounted
+    reversed, and config.STEERING_INVERTED compensates for it. So the
+    simulator behaves EXACTLY like the real car, we apply the same inversion
+    before sending the angle to Unity. current_angle is still the LOGICAL one."""
 
-    # 90 = recto. Espejo: physical = 2*90 - angle.
     STEERING_INVERTED = True
     SERVO_CENTER = 90.0
 
@@ -87,12 +80,12 @@ class MockSteeringDriver:
 
     def set_angle(self, angle_deg: float):
         """
-        angle_deg LÓGICO: [0,180] (90=recto, <90=izquierda, >90=derecha).
-        Se envía a Unity el ángulo FÍSICO (invertido) como en el carro real.
+        LOGICAL angle_deg: [0,180] (90=straight, <90=left, >90=right).
+        The PHYSICAL (inverted) angle is sent to Unity, as on the real car.
         """
         angle_deg = max(0, min(180, angle_deg))
         with self._lock:
-            self.current_angle = angle_deg   # lógico (telemetría)
+            self.current_angle = angle_deg
 
         physical = (2 * self.SERVO_CENTER - angle_deg
                     if self.STEERING_INVERTED else angle_deg)
@@ -100,10 +93,10 @@ class MockSteeringDriver:
             msg = f"SERVO:{physical:.2f}\n".encode()
             self.socket.sendall(msg)
         except Exception as e:
-            print(f"[MockSteering] Error enviando ángulo: {e}")
+            print(f"[MockSteering] Error sending angle: {e}")
 
     def center(self):
-        """Centra el servo (90°). Lo usa el FSM en deactivate()."""
+        """Centre the servo (90 deg). Used by the FSM in deactivate()."""
         self.set_angle(90.0)
 
     @property
@@ -112,8 +105,8 @@ class MockSteeringDriver:
 
 
 class MockDistanceSensor:
-    """Reemplaza: hardware/distance_sensor.py (VL53L0X x2).
-    NO crea su propio thread; los datos los inyecta el receptor unificado."""
+    """Replaces: hardware/distance_sensor.py (2x VL53L0X).
+    Does NOT create its own thread; data is injected by the unified receiver."""
 
     def __init__(self, socket_client):
         self.socket = socket_client
@@ -131,8 +124,8 @@ class MockDistanceSensor:
 
 
 class MockCameraStream:
-    """Reemplaza: vision/camera_stream.py.
-    NO crea su propio thread; los frames los inyecta el receptor unificado."""
+    """Replaces: vision/camera_stream.py.
+    Does NOT create its own thread; frames are injected by the unified receiver."""
 
     def __init__(self, socket_client, width=640, height=480):
         self.socket = socket_client
@@ -146,7 +139,7 @@ class MockCameraStream:
             self.latest_frame = frame
 
     def get_latest_frame(self) -> Optional[np.ndarray]:
-        """Retorna último frame recibido (BGR)"""
+        """Return the latest received frame (BGR)."""
         with self.frame_lock:
             return self.latest_frame.copy() if self.latest_frame is not None else None
 
@@ -154,26 +147,22 @@ class MockCameraStream:
         pass
 
 
-# ============================================================================
-# CLIENTE SIMULADOR
-# ============================================================================
-
 class SimulatorClient:
     """
-    Cliente que conecta Python ↔ Simulador Unity via TCP/IP.
-    Proporciona interfaces idénticas a hardware real.
+    Client connecting Python <-> Unity simulator over TCP/IP.
+    Provides interfaces identical to the real hardware.
     """
 
     def __init__(self, host='127.0.0.1', port=5005, timeout=5.0):
         """
-        Conectar al simulador.
+        Connect to the simulator.
 
         Args:
-            host: IP del simulador (127.0.0.1 = localhost)
-            port: Puerto TCP (defecto 5005)
-            timeout: Timeout de socket en segundos
+            host: simulator IP (127.0.0.1 = localhost)
+            port: TCP port (default 5005)
+            timeout: socket timeout in seconds
         """
-        print(f"[SimClient] Conectando a {host}:{port}...")
+        print(f"[SimClient] Connecting to {host}:{port}...")
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -181,52 +170,47 @@ class SimulatorClient:
 
         try:
             self.socket.connect((host, port))
-            print(f"[SimClient] ✓ Conectado a simulador")
+            print(f"[SimClient] Connected to the simulator")
         except Exception as e:
-            print(f"[SimClient] ✗ ERROR conectando: {e}")
-            print(f"[SimClient] ¿Unity está corriendo en {host}:{port}?")
+            print(f"[SimClient] ERROR connecting: {e}")
+            print(f"[SimClient] Is Unity running on {host}:{port}?")
             raise
 
-        # Crear mocks
         self.motor = MockMotorDriver(self.socket)
         self.steering = MockSteeringDriver(self.socket)
         self.distance = MockDistanceSensor(self.socket)
         self.camera = MockCameraStream(self.socket, width=640, height=480)
 
-        # Receptor unificado (UN solo thread leyendo el socket)
         self._listening = True
         self._recv_thread = threading.Thread(target=self._receive_loop, daemon=True)
         self._recv_thread.start()
 
     def _receive_loop(self):
         """
-        Lee del socket y demultiplexa mensajes:
-          - Texto:   "TOF:front,rear\n"  -> MockDistanceSensor
-          - Binario: [4 bytes BE size][JPEG] -> MockCameraStream
+        Read from the socket and demultiplex messages:
+          - Text:   "TOF:front,rear\n"  -> MockDistanceSensor
+          - Binary: [4 bytes BE size][JPEG] -> MockCameraStream
         """
         buffer = b""
         while self._listening:
             try:
                 data = self.socket.recv(65536)
                 if not data:
-                    # peer cerró el socket
-                    print("[SimClient] Servidor cerró la conexión.")
+                    print("[SimClient] Server closed the connection.")
                     self._listening = False
                     break
                 buffer += data
 
-                # Procesar todo lo que se pueda del buffer
                 while True:
                     if len(buffer) == 0:
                         break
 
                     first = buffer[0:1]
 
-                    # --- Mensaje TOF (texto) ---
                     if first == b'T':
                         nl = buffer.find(b'\n')
                         if nl == -1:
-                            break  # mensaje incompleto, esperar más bytes
+                            break
                         line = buffer[:nl].decode(errors='ignore').strip()
                         buffer = buffer[nl + 1:]
                         if line.startswith("TOF:"):
@@ -237,18 +221,15 @@ class SimulatorClient:
                             except (ValueError, IndexError):
                                 pass
 
-                    # --- Frame JPEG (binario) ---
                     else:
                         if len(buffer) < 4:
-                            break  # header incompleto
+                            break
                         size = int.from_bytes(buffer[:4], 'big')
-                        # Sanidad: descartar tamaños absurdos (>5 MB)
                         if size <= 0 or size > 5_000_000:
-                            # Algo se desincronizó: descartar 1 byte y reintentar
                             buffer = buffer[1:]
                             continue
                         if len(buffer) < 4 + size:
-                            break  # JPEG incompleto
+                            break
                         jpeg_bytes = buffer[4:4 + size]
                         buffer = buffer[4 + size:]
                         try:
@@ -263,7 +244,7 @@ class SimulatorClient:
                 continue
             except OSError as e:
                 if self._listening:
-                    print(f"[SimClient] OSError en recv: {e}")
+                    print(f"[SimClient] OSError in recv: {e}")
                 break
             except Exception as e:
                 if self._listening:
@@ -271,7 +252,7 @@ class SimulatorClient:
                 time.sleep(0.01)
 
     def close(self):
-        """Cerrar conexión con simulador"""
+        """Close the connection to the simulator."""
         self._listening = False
         try:
             self.motor.brake()
@@ -287,12 +268,12 @@ class SimulatorClient:
             pass
         try:
             self.socket.close()
-            print("[SimClient] ✓ Desconectado")
+            print("[SimClient] Disconnected")
         except Exception:
             pass
 
     def is_connected(self) -> bool:
-        """Verificar si conexión está activa"""
+        """Check whether the connection is active."""
         try:
             self.socket.sendall(b"PING")
             return True
@@ -306,10 +287,6 @@ class SimulatorClient:
         self.close()
 
 
-# ============================================================================
-# SCRIPT DE PRUEBA
-# ============================================================================
-
 if __name__ == "__main__":
     print("=" * 70)
     print("SIM2REAL HARDWARE MOCKS - TEST")
@@ -317,24 +294,21 @@ if __name__ == "__main__":
 
     try:
         with SimulatorClient(host='127.0.0.1', port=5005) as sim:
-            print("\n[TEST] Iniciando pruebas...")
+            print("\n[TEST] Starting tests...")
 
-            # Test 1: Motor
-            print("\n[TEST] Probando motor...")
+            print("\n[TEST] Testing motor...")
             for pwm in [10, 25, 50, 0]:
                 sim.motor.set_speed(pwm)
                 time.sleep(0.2)
                 print(f"  Motor PWM: {pwm}%")
 
-            # Test 2: Servo
-            print("\n[TEST] Probando servo...")
+            print("\n[TEST] Testing servo...")
             for angle in [45, 90, 135, 90]:
                 sim.steering.set_angle(angle)
                 time.sleep(0.2)
-                print(f"  Servo ángulo: {angle}°")
+                print(f"  Servo angle: {angle} deg")
 
-            # Test 3: Sensores
-            print("\n[TEST] Leyendo sensores (10 segundos)...")
+            print("\n[TEST] Reading sensors (10 seconds)...")
             start = time.time()
             while time.time() - start < 10:
                 if sim.distance.front_mm is not None:
@@ -342,13 +316,13 @@ if __name__ == "__main__":
 
                 frame = sim.camera.get_latest_frame()
                 if frame is not None:
-                    print(f"  Cámara: {frame.shape} (Frame recibido)")
+                    print(f"  Camera: {frame.shape} (frame received)")
 
                 time.sleep(0.1)
 
-            print("\n[TEST] ✓ Pruebas completadas")
+            print("\n[TEST] Tests complete")
 
     except Exception as e:
-        print(f"\n[TEST] ✗ Error: {e}")
+        print(f"\n[TEST] Error: {e}")
         import traceback
         traceback.print_exc()

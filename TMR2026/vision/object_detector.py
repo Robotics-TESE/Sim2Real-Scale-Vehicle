@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 object_detector.py — Post-procesado de las detecciones del IMX500.
 
@@ -28,8 +27,8 @@ from config import (
 
 @dataclass
 class TrafficLightState:
-    color: str           # "red", "yellow", "green", "unknown"
-    confidence: float    # [0, 1]
+    color: str
+    confidence: float
 
 
 class ObjectDetector:
@@ -48,7 +47,6 @@ class ObjectDetector:
     """
 
     def __init__(self):
-        # Contadores por etiqueta: cuántos frames consecutivos fue detectada
         self._consecutive: dict[str, int] = {
             "STOP": 0, "SEMAFORO": 0, "PERSONA": 0, "AUTO": 0
         }
@@ -57,18 +55,17 @@ class ObjectDetector:
     class AnalysisResult:
         stop_sign_detected: bool = False
         stop_sign_distance_mm: Optional[float] = None
-        stop_sign_bbox: Optional[tuple] = None    # (x1,y1,x2,y2)
+        stop_sign_bbox: Optional[tuple] = None
 
         traffic_light: Optional["TrafficLightState"] = None
 
         person_detected: bool = False
         car_detected: bool = False
-        car_bbox: Optional[tuple] = None          # bbox del auto más grande/cercano
-        car_in_lane: bool = False                 # True si el auto bloquea nuestro carril
-        car_in_park_zone: bool = False            # True si hay auto en zona lateral (parking)
+        car_bbox: Optional[tuple] = None
+        car_in_lane: bool = False
+        car_in_park_zone: bool = False
         closest_object_mm: Optional[float] = None
 
-    # ----------------------------------------------------------
     def analyze(
         self,
         detections: list[Detection],
@@ -98,7 +95,6 @@ class ObjectDetector:
             seen_labels.add(det.label)
 
             if det.label == "STOP":
-                # Verificación extra de color rojo en el bbox — evita falsos positivos
                 if frame is not None and self._has_red_color(frame, det):
                     result.stop_sign_bbox = (det.x1, det.y1, det.x2, det.y2)
                     dist_bbox = det.estimated_distance_m()
@@ -127,7 +123,6 @@ class ObjectDetector:
                     if area > prev_area:
                         result.car_bbox = bbox
 
-        # ── Filtro temporal: actualizar contadores ────────────────
         for label in self._consecutive:
             if label in seen_labels:
                 self._consecutive[label] = min(
@@ -135,7 +130,6 @@ class ObjectDetector:
             else:
                 self._consecutive[label] = 0
 
-        # Solo confirmar si lleva N frames consecutivos
         def confirmed(label: str) -> bool:
             return self._consecutive[label] >= DETECTION_MIN_FRAMES
 
@@ -144,11 +138,9 @@ class ObjectDetector:
         result.car_detected = (result.car_bbox is not None
                                and confirmed("AUTO"))
 
-        # Distancia al objeto más cercano
         if tof_distance_mm is not None:
             result.closest_object_mm = tof_distance_mm
 
-        # ── Clasificar posición del auto ──────────────────────────
         if result.car_bbox is not None:
             x1, y1, x2, y2 = result.car_bbox
             cx      = (x1 + x2) / 2
@@ -164,9 +156,6 @@ class ObjectDetector:
 
         return result
 
-    # ----------------------------------------------------------
-    # Verificación de color rojo en señal STOP
-    # ----------------------------------------------------------
     def _has_red_color(self, frame: np.ndarray, det: Detection) -> bool:
         """
         Verifica que el bbox de la señal STOP contiene suficiente rojo.
@@ -179,22 +168,18 @@ class ObjectDetector:
         x2 = min(frame.shape[1] - 1, det.x2 - pad)
         y2 = min(frame.shape[0] - 1, det.y2 - pad)
         if x2 <= x1 or y2 <= y1:
-            return True   # bbox inválido, aceptar de todas formas
+            return True
 
         roi = frame[y1:y2, x1:x2]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-        # Rojo en HSV tiene dos rangos (0-10 y 160-180)
         mask1 = cv2.inRange(hsv, np.array([0,  80, 80]),
                                  np.array([10, 255, 255]))
         mask2 = cv2.inRange(hsv, np.array([155, 80, 80]),
                                  np.array([180, 255, 255]))
         red_ratio = (np.sum(mask1 > 0) + np.sum(mask2 > 0)) / roi.size
-        return red_ratio >= 0.06   # al menos 6% de píxeles rojos
+        return red_ratio >= 0.06
 
-    # ----------------------------------------------------------
-    # Clasificación de semáforos por HSV en el bbox
-    # ----------------------------------------------------------
     def _classify_traffic_light(
         self, frame: np.ndarray, det: Detection
     ) -> TrafficLightState:
@@ -219,7 +204,6 @@ class ObjectDetector:
         roi = frame[y1:y2, x1:x2]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-        # Rangos HSV (calibrados para luz de interior/pista cerrada)
         ranges = {
             "red":    [((0, 100, 100), (10, 255, 255)),
                        ((160, 100, 100), (180, 255, 255))],
@@ -238,7 +222,6 @@ class ObjectDetector:
         total_px   = roi.shape[0] * roi.shape[1]
         confidence = scores[best_color] / total_px if total_px > 0 else 0.0
 
-        # Umbral mínimo para no reportar colores fantasma
         if confidence < 0.05:
             best_color = "unknown"
             confidence = 0.0

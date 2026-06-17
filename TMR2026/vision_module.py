@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 vision_module.py — Módulo de visión producción TMR 2026.
 
@@ -47,7 +46,6 @@ import numpy as np
 
 log = logging.getLogger("tmr.vision")
 
-# ─── Carga de configuración YAML ─────────────────────────────────────────────
 
 def _load_cfg() -> dict:
     """Carga vision_config.yaml junto a este archivo. Devuelve {} si falla."""
@@ -73,9 +71,6 @@ def _cv(section: str, key: str, default):
         return default
 
 
-# ─── Constantes desde YAML (o defaults si no hay YAML) ───────────────────────
-
-# Cámara
 _MAIN_W        = _cv("camera", "main_w", 1280)
 _MAIN_H        = _cv("camera", "main_h", 720)
 _LORES_W       = _cv("camera", "lores_w", 640)
@@ -90,7 +85,6 @@ _MODEL_CANDS: list[str] = _cv("camera", "model_candidates", [
 ])
 _MODEL_PATH = next((m for m in _MODEL_CANDS if os.path.exists(m)), _MODEL_CANDS[-1])
 
-# Carril
 _ROI_Y0        = _cv("lane", "roi_y_start", 240)
 _ROI_Y1        = _cv("lane", "roi_y_end",   480)
 _THRESH        = _cv("lane", "threshold", 200)
@@ -103,7 +97,6 @@ _PID_KI        = _lane_pid_cfg.get("ki", 0.05)
 _PID_KD        = _lane_pid_cfg.get("kd", 0.15)
 _PID_MAX_I     = _lane_pid_cfg.get("max_integral", 30.0)
 
-# Señales
 _SIGN_CONF     = _cv("signs", "confidence_threshold", 0.55)
 _SIGN_MIN_AREA = _cv("signs", "min_bbox_area_px2", 600)
 _SIGN_REAL_H   = _cv("signs", "sign_real_height_m", 0.10)
@@ -114,12 +107,10 @@ _APPROACH_M    = _cv("signs", "approach_dist_m", 0.50)
 _BRAKE_M       = _cv("signs", "brake_dist_m", 0.30)
 _SIGN_ROI_Y    = _cv("signs", "sign_roi_y_end", 200)
 
-# FSM
 _STOP_WAIT_S   = _cv("fsm", "stop_wait_s", 5.0)
 _APPROACH_F    = _cv("fsm", "speed_approach_factor", 0.60)
 _RESUME_RAMP_S = _cv("fsm", "resume_ramp_s", 1.5)
 
-# GPIO — CRÍTICO: chip 4 en Raspberry Pi 5 (no es chip 0 como en Pi 4)
 _GPIO_HAZ_L    = _cv("gpio", "led_hazard_left",  5)
 _GPIO_HAZ_R    = _cv("gpio", "led_hazard_right", 6)
 _GPIO_TURN_L   = _cv("gpio", "led_turn_left",   19)
@@ -127,16 +118,13 @@ _GPIO_TURN_R   = _cv("gpio", "led_turn_right",  20)
 _GPIO_BTN      = _cv("gpio", "btn_teleop",      21)
 _HAZ_HZ        = _cv("gpio", "hazard_blink_hz", 2.0)
 
-# Teleop UDP
 _UDP_PORT      = _cv("teleop", "udp_port", 5005)
 _UDP_HOST      = _cv("teleop", "udp_host", "0.0.0.0")
 
-# Rendimiento
 _FPS_WARN      = _cv("performance", "fps_warn_threshold",  25)
 _FPS_RESET     = _cv("performance", "fps_reset_threshold", 15)
 _FPS_WIN_S     = _cv("performance", "fps_check_window_s",  2.0)
 
-# Clases COCO → etiqueta TMR
 _COCO: dict[str, str] = {
     "stop sign":     "STOP",
     "traffic light": "SEMAFORO",
@@ -145,27 +133,23 @@ _COCO: dict[str, str] = {
 }
 
 
-# ─── Enums ────────────────────────────────────────────────────────────────────
-
 class VisionFSMState(Enum):
-    INIT             = auto()  # Módulo recién creado
-    CALIBRATING      = auto()  # Esperando bloqueo AE/AWB
-    LANE_FOLLOWING   = auto()  # Siguiendo carril normalmente
-    SIGN_APPROACH    = auto()  # Señal detectada, reduciendo velocidad
-    SIGN_BRAKING     = auto()  # Frenando progresivamente hacia la señal
-    STOPPED_AT_SIGN  = auto()  # Parado exacto; contando 5 s sin sleep
-    RESUMING         = auto()  # Rampa de reanudación tras parada
-    END_OF_TRACK     = auto()  # Carril perdido N frames → velocidad 0
-    TELEOP_OVERRIDE  = auto()  # Mando manual activo (UDP o botón físico)
+    INIT             = auto()
+    CALIBRATING      = auto()
+    LANE_FOLLOWING   = auto()
+    SIGN_APPROACH    = auto()
+    SIGN_BRAKING     = auto()
+    STOPPED_AT_SIGN  = auto()
+    RESUMING         = auto()
+    END_OF_TRACK     = auto()
+    TELEOP_OVERRIDE  = auto()
 
-
-# ─── Dataclasses públicas ─────────────────────────────────────────────────────
 
 @dataclass
 class LaneResult:
     """Resultado del detector de carril por histograma."""
-    error:      float          # px respecto al centro (neg=izq, pos=der)
-    confidence: float          # [0-1]: 1.0 = ambas líneas, 0.5 = una, 0.0 = ninguna
+    error:      float
+    confidence: float
     left_x:     Optional[int] = None
     right_x:    Optional[int] = None
     center_x:   Optional[int] = None
@@ -199,39 +183,31 @@ class VisionState:
     Inmutable una vez publicado — no mutar después de asignarlo al estado.
     Thread-safe: reemplazado atómicamente bajo lock, el objeto en sí no cambia.
     """
-    # ── Carril ───────────────────────────────────────────────────────
-    lane_error:       float = 0.0     # px: neg=izq, pos=der
-    lane_confidence:  float = 0.0     # [0-1]
-    steer_correction: float = 0.0     # salida PID de dirección
+    lane_error:       float = 0.0
+    lane_confidence:  float = 0.0
+    steer_correction: float = 0.0
 
-    # ── Señal STOP ───────────────────────────────────────────────────
     stop_detected:    bool           = False
     stop_distance_mm: Optional[float] = None
-    stop_bbox:        Optional[tuple] = None  # (x1,y1,x2,y2)
+    stop_bbox:        Optional[tuple] = None
 
-    # ── Semáforo ─────────────────────────────────────────────────────
-    traffic_light_color: str   = "unknown"  # "red"|"yellow"|"green"|"unknown"
+    traffic_light_color: str   = "unknown"
     traffic_light_conf:  float = 0.0
 
-    # ── Otros objetos ────────────────────────────────────────────────
     person_detected:  bool           = False
     car_detected:     bool           = False
     car_bbox:         Optional[tuple] = None
     car_in_lane:      bool           = False
-    car_in_park_zone: bool           = False   # True si auto en zona lateral derecha
+    car_in_park_zone: bool           = False
 
-    # ── FSM ──────────────────────────────────────────────────────────
     fsm_state:    VisionFSMState = VisionFSMState.INIT
-    speed_factor: float          = 1.0   # multiplicador velocidad [0-1]
+    speed_factor: float          = 1.0
 
-    # ── Meta ─────────────────────────────────────────────────────────
     fps:             float = 0.0
     frame_id:        int   = 0
     timestamp:       float = field(default_factory=time.monotonic)
     raw_detections:  list  = field(default_factory=list)
 
-
-# ─── Clase principal ──────────────────────────────────────────────────────────
 
 class VisionModule:
     """
@@ -252,65 +228,52 @@ class VisionModule:
         self._display_overlay = display_overlay
         self._model_path = _MODEL_PATH
 
-        # Picamera2 + IMX500 — se crean en _init_camera()
         self._imx500 = None
         self._picam2 = None
 
-        # Estado publicado (reemplazado atómicamente)
         self._state      = VisionState()
         self._state_lock = threading.Lock()
 
-        # Frames para uso externo
         self._latest_frame:   Optional[np.ndarray] = None
         self._latest_y_plane: Optional[np.ndarray] = None
         self._frame_lock   = threading.Lock()
         self._y_lock       = threading.Lock()
 
-        # Hilo de captura
         self._stop_event = threading.Event()
         self._cap_thread: Optional[threading.Thread] = None
 
-        # FSM interna (solo se modifica en el hilo de captura)
         self._fsm             = VisionFSMState.INIT
         self._stopped_since   = 0.0
         self._resume_start    = 0.0
         self._lost_frames     = 0
 
-        # PID de carril
         self._pid_integral   = 0.0
         self._pid_prev_err   = 0.0
         self._pid_prev_t     = time.monotonic()
 
-        # Histéresis de señales: label → {bbox, count, conf}
         self._sign_hyst: dict[str, dict] = {
             v: {"bbox": None, "count": 0, "conf": 0.0}
             for v in _COCO.values()
         }
 
-        # Mapa class_id → etiqueta TMR
         self._class_map: dict[int, str] = {}
 
-        # Vigilante FPS
         self._fps_ts:       list[float] = []
         self._fps_low_since = 0.0
 
-        # Contador de fallos de captura
         self._cap_fails = 0
 
-        # GPIO
         self._gpio_h:    Optional[int] = None
         self._gpio_ok    = False
-        self._haz_event  = threading.Event()   # set() = apagar hazard
+        self._haz_event  = threading.Event()
         self._haz_thread: Optional[threading.Thread] = None
 
-        # Teleop
         self._teleop_active = False
         self._teleop_sock:   Optional[socket.socket] = None
         self._teleop_thread: Optional[threading.Thread] = None
 
         log.info("VisionModule creado — modelo: %s", self._model_path)
 
-    # ─── Ciclo de vida ────────────────────────────────────────────────
 
     def start(self) -> None:
         """Inicializa GPIO, UDP, cámara y arranca el hilo de captura."""
@@ -342,7 +305,6 @@ class VisionModule:
         self._release_gpio()
         log.info("VisionModule detenido.")
 
-    # ─── API pública (thread-safe) ────────────────────────────────────
 
     def get_state(self) -> VisionState:
         """Retorna el VisionState más reciente. Nunca bloquea más de µs."""
@@ -384,7 +346,7 @@ class VisionModule:
         if not self._gpio_ok:
             return
         if self._haz_thread and self._haz_thread.is_alive():
-            return  # ya activo
+            return
         self._haz_event.clear()
         self._haz_thread = threading.Thread(
             target=self._hazard_blink_loop,
@@ -417,7 +379,6 @@ class VisionModule:
         except Exception:
             pass
 
-    # ─── Inicialización de cámara ─────────────────────────────────────
 
     def _init_camera(self) -> None:
         from picamera2 import Picamera2
@@ -426,25 +387,24 @@ class VisionModule:
         self._imx500 = IMX500(self._model_path)
         self._picam2 = Picamera2(self._imx500.camera_num)
 
-        # CRÍTICO: dual-stream — main BGR888 para display/overlay, lores YUV420 para carril
         cfg = self._picam2.create_preview_configuration(
             main={
-                "format": "BGR888",          # OpenCV nativo — sin cvtColor
+                "format": "BGR888",
                 "size":   (_MAIN_W, _MAIN_H),
             },
             lores={
-                "format": "YUV420",          # CRÍTICO: plano Y sin conversión de color
+                "format": "YUV420",
                 "size":   (_LORES_W, _LORES_H),
             },
             controls={
-                "FrameDurationLimits": (33333, 33333),  # CRÍTICO: 30 FPS fijo exacto
+                "FrameDurationLimits": (33333, 33333),
                 "AeEnable":      True,
                 "AwbEnable":     True,
-                "AwbMode":       4,           # Indoor — corrige tono azulado
+                "AwbMode":       4,
                 "Contrast":      1.5,
                 "Saturation":    1.8,
                 "Sharpness":     4.0,
-                "NoiseReductionMode": 2,      # CDN_Fast
+                "NoiseReductionMode": 2,
             },
             buffer_count=_BUF_COUNT,
         )
@@ -511,7 +471,6 @@ class VisionModule:
         except Exception as exc:
             log.warning("No se pudo construir mapa de clases: %s", exc)
 
-    # ─── Hilo de captura ─────────────────────────────────────────────
 
     def _capture_loop(self) -> None:
         """
@@ -525,15 +484,13 @@ class VisionModule:
 
         while not self._stop_event.is_set():
 
-            # ── Botón teleop físico ──────────────────────────────
             if self._gpio_ok:
                 self._poll_teleop_button()
 
-            # ── Captura dual-stream ──────────────────────────────
             try:
                 req       = self._picam2.capture_request()
-                main_arr  = req.make_array("main")    # (H, W, 3) BGR
-                lores_arr = req.make_array("lores")   # (H*1.5, W) uint8 YUV420
+                main_arr  = req.make_array("main")
+                lores_arr = req.make_array("lores")
                 meta      = req.get_metadata()
                 req.release()
             except Exception as exc:
@@ -547,42 +504,34 @@ class VisionModule:
 
             self._cap_fails = 0
 
-            # ── Publicar frame BGR para uso externo ──────────────
             with self._frame_lock:
                 self._latest_frame = main_arr
 
-            # CRÍTICO: plano Y = primeras _LORES_H filas del array YUV420 (sin cvtColor)
             y_plane = lores_arr[:_LORES_H, :]
             with self._y_lock:
                 self._latest_y_plane = y_plane
 
-            # ── Detección de carril (histograma) ──────────────────
             lane = self._detect_lane(y_plane)
 
-            # ── Detecciones NPU (sin inferencia CPU) ──────────────
             raw_dets  = self._parse_npu(meta, main_arr.shape)
             sign_dets = self._filter_signs(raw_dets)
 
-            # Debug cada ~2 s
             dbg_count += 1
             if dbg_count % 60 == 0 and raw_dets:
                 print("[VISION] NPU raw:", ", ".join(
                     f"{d.label}({d.confidence:.2f})" for d in raw_dets))
 
-            # ── Distancia pin-hole a señal STOP ───────────────────
             stop_det = next((d for d in sign_dets if d.label == "STOP"), None)
             dist_mm: Optional[float] = None
             if stop_det is not None and stop_det.height >= 5:
                 dist_mm = (_SIGN_REAL_H * _FOCAL_PX / stop_det.height) * 1000.0
 
-            # ── Construir VisionState + paso FSM ──────────────────
             new_state = self._build_state(lane, sign_dets, dist_mm, raw_dets)
             self._update_fps(new_state)
 
             with self._state_lock:
                 self._state = new_state
 
-    # ─── Detección de carril por histograma ──────────────────────────
 
     def _detect_lane(self, y_plane: np.ndarray) -> LaneResult:
         """
@@ -602,7 +551,6 @@ class VisionModule:
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (_MORPH_K, _MORPH_K))
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
 
-        # CRÍTICO: histograma de columnas — evita Hough (más lento en CPU embebido)
         histogram = np.sum(binary, axis=0).astype(np.int32)
 
         W   = histogram.shape[0]
@@ -637,7 +585,6 @@ class VisionModule:
             center_x=cx,
         )
 
-    # ─── Parseo NPU ──────────────────────────────────────────────────
 
     def _parse_npu(
         self, metadata: dict, img_shape: tuple
@@ -657,13 +604,13 @@ class VisionModule:
 
         try:
             if len(np_out) >= 4:
-                boxes   = np_out[0][0]           # (N,4) ymin,xmin,ymax,xmax
+                boxes   = np_out[0][0]
                 classes = np_out[1][0]
                 scores  = np_out[2][0]
                 count   = int(np_out[3][0])
                 tf_fmt  = True
             else:
-                boxes   = np_out[0][0]           # (N,4) x1,y1,x2,y2
+                boxes   = np_out[0][0]
                 scores  = np_out[1][0]
                 classes = np_out[2][0]
                 count   = len(scores)
@@ -699,7 +646,6 @@ class VisionModule:
             ))
         return results
 
-    # ─── Filtro de señales (ROI superior + área + histéresis IoU) ────
 
     def _filter_signs(
         self, raw: list[DetectionResult]
@@ -710,7 +656,6 @@ class VisionModule:
         2. Área mínima > _SIGN_MIN_AREA px².
         3. Histéresis de _HYST_F frames con IoU > _IOU_THRESH.
         """
-        # Candidatos: mejor confianza por etiqueta que pase filtros de ROI y área
         cands: dict[str, DetectionResult] = {}
         for d in raw:
             if d.label in ("STOP", "SEMAFORO") and d.cy > _SIGN_ROI_Y:
@@ -742,7 +687,6 @@ class VisionModule:
 
         return confirmed
 
-    # ─── Construcción de VisionState + FSM ───────────────────────────
 
     def _build_state(
         self,
@@ -754,7 +698,6 @@ class VisionModule:
         """Combina los resultados del frame en un VisionState y avanza la FSM."""
         s = VisionState(raw_detections=raw_dets)
 
-        # ── Carril ────────────────────────────────────────────────
         s.lane_error      = lane.error
         s.lane_confidence = lane.confidence
         s.steer_correction = self._pid_step(lane.error)
@@ -764,7 +707,6 @@ class VisionModule:
         else:
             self._lost_frames = 0
 
-        # ── Señales confirmadas ───────────────────────────────────
         for det in sign_dets:
             if det.label == "STOP":
                 s.stop_detected    = True
@@ -786,10 +728,8 @@ class VisionModule:
                                     and det.area >= 2500)
                 s.car_in_park_zone = cx > _MAIN_W * 0.55
 
-        # ── Paso FSM ──────────────────────────────────────────────
         s.fsm_state, s.speed_factor = self._step_fsm(s, dist_mm)
 
-        # ── GPIO: hazard automático en parada / fin de pista ──────
         if self._gpio_ok:
             if s.fsm_state in (VisionFSMState.STOPPED_AT_SIGN,
                                VisionFSMState.END_OF_TRACK):
@@ -799,7 +739,6 @@ class VisionModule:
 
         return s
 
-    # ─── PID de carril ────────────────────────────────────────────────
 
     def _pid_step(self, error: float) -> float:
         """Un paso del PID proporcional-integral-derivativo del carril."""
@@ -815,7 +754,6 @@ class VisionModule:
 
         return _PID_KP * error + _PID_KI * self._pid_integral + _PID_KD * deriv
 
-    # ─── FSM de 9 estados ────────────────────────────────────────────
 
     def _step_fsm(
         self,
@@ -833,14 +771,12 @@ class VisionModule:
         """
         now = time.monotonic()
 
-        # ── Prioridad 1: Teleop ───────────────────────────────────
         if self._teleop_active:
             if self._fsm != VisionFSMState.TELEOP_OVERRIDE:
                 log.info("FSM → TELEOP_OVERRIDE")
                 self._fsm = VisionFSMState.TELEOP_OVERRIDE
             return VisionFSMState.TELEOP_OVERRIDE, 1.0
 
-        # ── Prioridad 2: Fin de pista ─────────────────────────────
         if self._lost_frames >= _LOST_LIMIT:
             if self._fsm not in (VisionFSMState.END_OF_TRACK,
                                  VisionFSMState.STOPPED_AT_SIGN):
@@ -849,17 +785,14 @@ class VisionModule:
                 self._fsm = VisionFSMState.END_OF_TRACK
             return VisionFSMState.END_OF_TRACK, 0.0
 
-        # ── Recuperación de END_OF_TRACK si el carril vuelve ─────
         if self._fsm == VisionFSMState.END_OF_TRACK:
             log.info("FSM END_OF_TRACK → LANE_FOLLOWING (carril recuperado)")
             self._fsm = VisionFSMState.LANE_FOLLOWING
 
-        # ── Recuperación de TELEOP_OVERRIDE ───────────────────────
         if self._fsm == VisionFSMState.TELEOP_OVERRIDE:
             log.info("FSM TELEOP_OVERRIDE → LANE_FOLLOWING")
             self._fsm = VisionFSMState.LANE_FOLLOWING
 
-        # ── Transiciones del bloque STOP ──────────────────────────
         match self._fsm:
 
             case VisionFSMState.CALIBRATING:
@@ -895,7 +828,6 @@ class VisionModule:
                     self._fsm        = VisionFSMState.STOPPED_AT_SIGN
                     self._stopped_since = now
                     return VisionFSMState.STOPPED_AT_SIGN, 0.0
-                # Factor proporcional a distancia restante
                 factor = max(0.05, min(0.3,
                              dist_mm / (_APPROACH_M * 1000.0) * 0.3))
                 return VisionFSMState.SIGN_BRAKING, factor
@@ -913,7 +845,6 @@ class VisionModule:
                 if t >= 1.0:
                     log.info("FSM RESUMING→LANE_FOLLOWING")
                     self._fsm = VisionFSMState.LANE_FOLLOWING
-                    # Limpiar histéresis para evitar re-trigger inmediato
                     for h in self._sign_hyst.values():
                         h["count"] = 0; h["bbox"] = None
                     return VisionFSMState.LANE_FOLLOWING, 1.0
@@ -922,13 +853,12 @@ class VisionModule:
             case _:
                 return self._fsm, 1.0
 
-    # ─── GPIO setup / teardown ────────────────────────────────────────
 
     def _setup_gpio(self) -> None:
         h = None
         try:
             import lgpio
-            h = lgpio.gpiochip_open(4)   # CRÍTICO: chip 4 en Pi 5
+            h = lgpio.gpiochip_open(4)
             for pin in (_GPIO_HAZ_L, _GPIO_HAZ_R, _GPIO_TURN_L, _GPIO_TURN_R):
                 lgpio.gpio_claim_output(h, pin, 0, 0)
             lgpio.gpio_claim_input(h, _GPIO_BTN, lgpio.SET_PULL_UP)
@@ -989,7 +919,6 @@ class VisionModule:
                 lgpio.gpio_write(self._gpio_h, _GPIO_HAZ_R, 0)
             except Exception: pass
 
-    # ─── Teleop UDP ───────────────────────────────────────────────────
 
     def _start_teleop_udp(self) -> None:
         try:
@@ -1034,7 +963,6 @@ class VisionModule:
                 if not self._stop_event.is_set():
                     log.debug("Teleop UDP recv error: %s", exc)
 
-    # ─── FPS watchdog ─────────────────────────────────────────────────
 
     def _update_fps(self, s: VisionState) -> None:
         now = time.monotonic()
@@ -1065,7 +993,6 @@ class VisionModule:
         else:
             self._fps_low_since = 0.0
 
-    # ─── Overlay (MappedArray — sin copia de frame) ───────────────────
 
     def _overlay_callback(self, request) -> None:
         """Dibuja bboxes sobre el buffer DMA. Invocado por Picamera2 pre-entrega."""
@@ -1082,7 +1009,6 @@ class VisionModule:
                             (d.x1, max(d.y1-6, 12)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, c, 1, cv2.LINE_AA)
 
-    # ─── Reconexión de cámara ─────────────────────────────────────────
 
     def _reconnect(self) -> None:
         log.warning("Reconectando cámara...")
@@ -1096,8 +1022,6 @@ class VisionModule:
         except Exception as exc:
             log.error("Reconexión fallida: %s", exc)
 
-
-# ─── Funciones auxiliares (module-level, no instanciables) ───────────────────
 
 def _iou(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) -> float:
     """Intersection over Union entre dos bboxes."""
@@ -1142,8 +1066,6 @@ def _classify_light(
     conf  = scores[best] / total if total > 0 else 0.0
     return (best, conf) if conf >= 0.05 else ("unknown", 0.0)
 
-
-# ─── Demo / prueba directa ────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     logging.basicConfig(

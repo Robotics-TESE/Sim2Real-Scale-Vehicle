@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 armar_entrega.py — Builds the ENGLISH delivery ZIP for the professor.
 
@@ -24,9 +23,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEST = os.path.join(os.path.expanduser("~"), "Documents", "DELIVERY_TMR2026")
 ZIP  = DEST
 
-# Results from validation_results/  (source name -> name inside the ZIP).
 RESULT_FILES = {
-    "P1_latencia.csv":  "P1_latency.csv",
+    "P1_latency.csv":   "P1_latency.csv",
     "P2_pid_stop.csv":  "P2_pid_stop.csv",
     "P3_fsm.csv":       "P3_fsm.csv",
     "fig1_latency.png": "fig1_latency.png",
@@ -35,7 +33,6 @@ RESULT_FILES = {
     "SCOREBOARD.txt":   "SCOREBOARD.txt",
 }
 
-# English documents (source name -> name inside the ZIP).
 DOC_FILES = {
     "DELIVERY_PROFESSOR.md": "DELIVERY_PROFESSOR.md",
     "CALIBRATION_SIM.md":    "CALIBRATION_SIM.md",
@@ -58,7 +55,7 @@ def _copy(src_dir, mapping, dst_dir, label):
 
 def main():
     print("=" * 60)
-    print("  BUILDING DELIVERY PACKAGE (English) — TMR 2026")
+    print("  BUILDING DELIVERY PACKAGE (English) - TMR 2026")
     print("=" * 60)
 
     if os.path.isdir(DEST):
@@ -73,7 +70,6 @@ def main():
     _copy(os.path.join(HERE, "docs"), DOC_FILES,
           os.path.join(DEST, "02_documents"), "02_documents/")
 
-    # README (English)
     with open(os.path.join(DEST, "README.txt"), "w", encoding="utf-8") as f:
         f.write(
             "DELIVERY - Sim2Real Validation of the Autonomous Vehicle (TMR 2026)\n"
@@ -92,7 +88,8 @@ def main():
             "   PDF requirement) and CALIBRATION_SIM.md (simulator calibration).\n\n"
             "Note: the FSM state names (CRUCERO, PRECAUCION, FRENADO, ESPERA,\n"
             "REANUDAR) are code identifiers and are kept as-is.\n\n"
-            "Source code: GitHub repos 'Carrito' (Python) and 'TMR2026_Sim' (Unity).\n"
+            "Source code: GitHub repos 'Sim2Real-Scale-Vehicle' (Python) and\n"
+            "'TMR2026_Sim' (Unity).\n"
         )
     print("   OK  README.txt")
 

@@ -1,23 +1,21 @@
-# -*- coding: utf-8 -*-
-"""
-validation_logger.py — Logging CSV + sistema de puntos para la
-"Validación Sim2Real del Vehículo Autónomo" (PDF del profesor).
+"""CSV logging + scoring system for the "Sim2Real Validation of the
+Autonomous Vehicle".
 
-Genera los 3 entregables (Fase 3 del PDF):
-  - Prueba 1 (Latencia):  P1_latencia.csv
-  - Prueba 2 (PID/STOP):  P2_pid_stop.csv
-  - Prueba 3 (FSM):       P3_fsm.csv
+Produces the 3 deliverables (validation phase):
+  - Test 1 (Latency):  P1_latency.csv
+  - Test 2 (PID/STOP): P2_pid_stop.csv
+  - Test 3 (FSM):      P3_fsm.csv
 
-Y un sistema de PUNTOS estilo competencia que evalúa cada prueba contra su
-criterio de aceptación y produce un reporte de puntaje.
+Plus a competition-style SCORING system that grades each test against its
+acceptance criterion and produces a score report.
 
-Uso:
-    log = ValidationLogger()                 # crea carpeta validation_results/
-    log.log_cycle(latency_ms, err, conf)     # cada ciclo de control
-    log.log_stop(dist_mm, pwm, err, estado)  # mientras se aproxima al STOP
-    log.log_fsm(old_state, new_state)        # en cada transición de la FSM
-    log.save_all()                           # escribe los 3 CSV
-    log.print_scoreboard()                   # imprime puntos y guarda reporte
+Usage:
+    log = ValidationLogger()                 # creates validation_results/
+    log.log_cycle(latency_ms, err, conf)     # every control cycle
+    log.log_stop(dist_mm, pwm, err, state)   # while approaching the STOP
+    log.log_fsm(new_state)                    # on every FSM transition
+    log.save_all()                            # writes the 3 CSVs
+    log.print_scoreboard()                    # prints score and saves report
 """
 
 import os
@@ -28,16 +26,12 @@ from typing import Optional
 
 class ValidationLogger:
 
-    # ── Criterios de aceptación (del PDF) ─────────────────────────────────────
-    LATENCY_MAX_MS      = 200.0   # ciclo percepción→actuación < 100-200 ms
-    LATENCY_BONUS_MS    = 100.0   # bonus si < 100 ms
-    STOP_TARGET_MM      = 270.0   # parada objetivo
-    STOP_TOLERANCE_MM   = 30.0    # 270 ± 30 → ventana 240-300 mm
-    # Estados que la FSM debe recorrer (Prueba 3). Hay dos ciclos válidos:
-    #   - Ciclo STOP:    CRUCERO→PRECAUCION→FRENADO→ESPERA→REANUDAR
-    #   - Ciclo PARKING: PARKING_SEARCH→PARKING_MANEUVER→PARKED (PDF Prueba 3)
-    FSM_ESPERADOS_STOP    = ["CRUCERO", "PRECAUCION", "FRENADO", "ESPERA", "REANUDAR"]
-    FSM_ESPERADOS_PARKING = ["PARKING_SEARCH", "PARKING_MANEUVER", "PARKED"]
+    LATENCY_MAX_MS      = 200.0
+    LATENCY_BONUS_MS    = 100.0
+    STOP_TARGET_MM      = 270.0
+    STOP_TOLERANCE_MM   = 30.0
+    FSM_EXPECTED_STOP    = ["CRUCERO", "PRECAUCION", "FRENADO", "ESPERA", "REANUDAR"]
+    FSM_EXPECTED_PARKING = ["PARKING_SEARCH", "PARKING_MANEUVER", "PARKED"]
 
     def __init__(self, outdir: str = "validation_results"):
         os.makedirs(outdir, exist_ok=True)
@@ -51,13 +45,12 @@ class ValidationLogger:
         self._last_fsm_state: Optional[str] = None
         self._last_fsm_time = self.t0
 
-    # ─── Registro ──────────────────────────────────────────────────────────────
 
     def _t(self) -> float:
         return time.monotonic() - self.t0
 
     def log_cycle(self, latency_ms: float, error_px: float, conf: float) -> None:
-        """Prueba 1: latencia del ciclo de control (percepción→respuesta)."""
+        """Test 1: control-loop latency (perception -> response)."""
         self.latency_rows.append({
             "t_s":          round(self._t(), 4),
             "latency_ms":   round(latency_ms, 2),
@@ -67,7 +60,7 @@ class ValidationLogger:
 
     def log_stop(self, distance_mm: Optional[float], pwm: float,
                  error_px: float, fsm_state: str) -> None:
-        """Prueba 2: frenado ante STOP (distancia ToF vs PWM vs tiempo)."""
+        """Test 2: braking at a STOP (ToF distance vs PWM vs time)."""
         self.stop_rows.append({
             "t_s":          round(self._t(), 4),
             "distance_mm":  round(distance_mm, 1) if distance_mm is not None else "",
@@ -77,14 +70,13 @@ class ValidationLogger:
         })
 
     def log_fsm(self, new_state: str) -> None:
-        """Prueba 3: registra una transición de estado de la FSM."""
+        """Test 3: record an FSM state transition."""
         if new_state == self._last_fsm_state:
             return
         now = self._t()
-        dwell = now - (self._last_fsm_time - self.t0) if self._last_fsm_state else 0.0
         self.fsm_rows.append({
             "t_s":          round(now, 4),
-            "from_state":   self._last_fsm_state or "INICIO",
+            "from_state":   self._last_fsm_state or "START",
             "to_state":     new_state,
             "dwell_prev_s": round(now - (self._last_fsm_time - self.t0), 3)
                             if self._last_fsm_state else 0.0,
@@ -92,7 +84,6 @@ class ValidationLogger:
         self._last_fsm_state = new_state
         self._last_fsm_time = time.monotonic()
 
-    # ─── Exportar CSV ───────────────────────────────────────────────────────────
 
     def _write(self, name: str, rows: list[dict], fields: list[str]) -> str:
         path = os.path.join(self.outdir, name)
@@ -104,8 +95,8 @@ class ValidationLogger:
 
     def save_all(self) -> dict:
         paths = {}
-        paths["latencia"] = self._write(
-            "P1_latencia.csv", self.latency_rows,
+        paths["latency"] = self._write(
+            "P1_latency.csv", self.latency_rows,
             ["t_s", "latency_ms", "error_px", "confidence"])
         paths["pid_stop"] = self._write(
             "P2_pid_stop.csv", self.stop_rows,
@@ -115,145 +106,111 @@ class ValidationLogger:
             ["t_s", "from_state", "to_state", "dwell_prev_s"])
         return paths
 
-    # ─── Sistema de PUNTOS (estilo competencia) ──────────────────────────────────
 
     def evaluate(self) -> dict:
-        """Evalúa cada prueba contra su criterio y asigna puntos (0-100)."""
-        res = {"pruebas": [], "total": 0, "max": 0}
+        """Grade each test against its criterion and assign points (0-100)."""
+        res = {"tests": [], "total": 0, "max": 0}
 
-        # ── Prueba 1: Latencia ──
-        # Filtrar outliers (> 500 ms = timeouts de socket, no ciclos reales).
         lat = [r["latency_ms"] for r in self.latency_rows
                if 0 < r["latency_ms"] < 500]
-        p1 = {"nombre": "P1 Latencia ciclo de control",
-              "nombre_en": "P1 Control-loop latency",
-              "puntos": 0, "max": 30, "detalle": "", "detalle_en": ""}
+        p1 = {"name": "P1 Control-loop latency",
+              "points": 0, "max": 30, "detail": ""}
         if lat:
             avg = sum(lat) / len(lat)
             mx = max(lat)
             if avg < self.LATENCY_BONUS_MS:
-                p1["puntos"] = 30
+                p1["points"] = 30
             elif avg < self.LATENCY_MAX_MS:
-                p1["puntos"] = 20
+                p1["points"] = 20
             else:
-                p1["puntos"] = 5
-            p1["detalle"] = (f"latencia media {avg:.1f} ms, máx {mx:.1f} ms "
-                             f"(objetivo < {self.LATENCY_MAX_MS:.0f} ms)")
-            p1["detalle_en"] = (f"mean latency {avg:.1f} ms, max {mx:.1f} ms "
-                                f"(target < {self.LATENCY_MAX_MS:.0f} ms)")
+                p1["points"] = 5
+            p1["detail"] = (f"mean latency {avg:.1f} ms, max {mx:.1f} ms "
+                            f"(target < {self.LATENCY_MAX_MS:.0f} ms)")
         else:
-            p1["detalle"] = "sin datos de latencia"
-            p1["detalle_en"] = "no latency data"
-        res["pruebas"].append(p1)
+            p1["detail"] = "no latency data"
+        res["tests"].append(p1)
 
-        # ── Prueba 2: Frenado STOP a 270±30 mm ──
-        p2 = {"nombre": "P2 Frenado PID ante STOP",
-              "nombre_en": "P2 PID braking at STOP",
-              "puntos": 0, "max": 40, "detalle": "", "detalle_en": ""}
-        # distancia donde el carro quedó detenido (pwm≈0 en estado FRENADO/ESPERA)
-        parado = [r for r in self.stop_rows
-                  if r["fsm_state"] in ("FRENADO", "ESPERA")
-                  and isinstance(r["distance_mm"], (int, float))]
-        if parado:
-            # Distancia a la que QUEDÓ DETENIDO: se toma de las lecturas con la
-            # señal visible (< 1000 mm), no las del ToF cuando la señal ya no
-            # se ve (≈2000 mm). Se usa la mediana para robustez ante el ruido.
-            parado_vis = [r["distance_mm"] for r in parado
-                          if r["distance_mm"] < 1000]
-            if parado_vis:
-                s = sorted(parado_vis)
-                dist_final = s[len(s) // 2]      # mediana
+        p2 = {"name": "P2 PID braking at STOP",
+              "points": 0, "max": 40, "detail": ""}
+        stopped = [r for r in self.stop_rows
+                   if r["fsm_state"] in ("FRENADO", "ESPERA")
+                   and isinstance(r["distance_mm"], (int, float))]
+        if stopped:
+            visible = [r["distance_mm"] for r in stopped
+                       if r["distance_mm"] < 1000]
+            if visible:
+                s = sorted(visible)
+                dist_final = s[len(s) // 2]
             else:
-                dist_final = parado[-1]["distance_mm"]
+                dist_final = stopped[-1]["distance_mm"]
             err_dist = abs(dist_final - self.STOP_TARGET_MM)
-            dentro = err_dist <= self.STOP_TOLERANCE_MM
-            # ¿sobreimpulso REAL? Solo distancias del frenado con señal visible.
+            within = err_dist <= self.STOP_TOLERANCE_MM
             dists = [r["distance_mm"] for r in self.stop_rows
                      if r["fsm_state"] in ("PRECAUCION", "FRENADO", "ESPERA")
                      and isinstance(r["distance_mm"], (int, float))
                      and r["distance_mm"] < 1000]
             min_d = min(dists) if dists else dist_final
-            sobreimpulso = min_d < (self.STOP_TARGET_MM - 2.5 * self.STOP_TOLERANCE_MM)
-            if dentro and not sobreimpulso:
-                p2["puntos"] = 40
-            elif dentro:
-                p2["puntos"] = 30   # llegó pero con sobreimpulso
+            overshoot = min_d < (self.STOP_TARGET_MM - 2.5 * self.STOP_TOLERANCE_MM)
+            if within and not overshoot:
+                p2["points"] = 40
+            elif within:
+                p2["points"] = 30
             elif err_dist <= 2 * self.STOP_TOLERANCE_MM:
-                p2["puntos"] = 20   # cerca
+                p2["points"] = 20
             else:
-                p2["puntos"] = 5
-            p2["detalle"] = (f"se detuvo a {dist_final:.0f} mm "
-                             f"(objetivo {self.STOP_TARGET_MM:.0f}±{self.STOP_TOLERANCE_MM:.0f}), "
-                             f"{'sin' if not sobreimpulso else 'con'} sobreimpulso")
-            p2["detalle_en"] = (f"stopped at {dist_final:.0f} mm "
-                                f"(target {self.STOP_TARGET_MM:.0f}±{self.STOP_TOLERANCE_MM:.0f}), "
-                                f"{'no' if not sobreimpulso else 'with'} overshoot")
+                p2["points"] = 5
+            p2["detail"] = (f"stopped at {dist_final:.0f} mm "
+                            f"(target {self.STOP_TARGET_MM:.0f}+/-{self.STOP_TOLERANCE_MM:.0f}), "
+                            f"{'no' if not overshoot else 'with'} overshoot")
         else:
-            p2["detalle"] = "el carro no llegó a FRENADO/ESPERA (no detectó STOP)"
-            p2["detalle_en"] = "the car did not reach FRENADO/ESPERA (STOP not detected)"
-        res["pruebas"].append(p2)
+            p2["detail"] = "the car did not reach FRENADO/ESPERA (STOP not detected)"
+        res["tests"].append(p2)
 
-        # ── Prueba 3: Transiciones FSM sin bloqueo ──
-        p3 = {"nombre": "P3 Transiciones FSM",
-              "nombre_en": "P3 FSM transitions",
-              "puntos": 0, "max": 30, "detalle": "", "detalle_en": ""}
-        visitados = [r["to_state"] for r in self.fsm_rows]
-        ciclo_stop = [s for s in self.FSM_ESPERADOS_STOP if s in visitados]
-        ciclo_park = [s for s in self.FSM_ESPERADOS_PARKING if s in visitados]
-        n_stop = len(ciclo_stop)
-        n_park = len(ciclo_park)
-        # 30 pts si completa el ciclo STOP (5) O el ciclo PARKING (3)
+        p3 = {"name": "P3 FSM transitions",
+              "points": 0, "max": 30, "detail": ""}
+        visited = [r["to_state"] for r in self.fsm_rows]
+        stop_cycle = [s for s in self.FSM_EXPECTED_STOP if s in visited]
+        park_cycle = [s for s in self.FSM_EXPECTED_PARKING if s in visited]
+        n_stop = len(stop_cycle)
+        n_park = len(park_cycle)
         if n_stop >= 5 or n_park >= 3:
-            p3["puntos"] = 30
+            p3["points"] = 30
         elif n_stop >= 3 or n_park >= 2:
-            p3["puntos"] = 20
+            p3["points"] = 20
         elif n_stop >= 1 or n_park >= 1:
-            p3["puntos"] = 10
-        det = f"STOP {n_stop}/5: {', '.join(ciclo_stop) or '—'}"
-        det_en = f"STOP {n_stop}/5: {', '.join(ciclo_stop) or '—'}"
+            p3["points"] = 10
+        det = f"STOP {n_stop}/5: {', '.join(stop_cycle) or '-'}"
         if n_park > 0:
-            det += f"  |  PARKING {n_park}/3: {', '.join(ciclo_park)}"
-            det_en += f"  |  PARKING {n_park}/3: {', '.join(ciclo_park)}"
-        det += f"  ({len(self.fsm_rows)} transiciones)"
-        det_en += f"  ({len(self.fsm_rows)} transitions)"
-        p3["detalle"] = det
-        p3["detalle_en"] = det_en
-        res["pruebas"].append(p3)
+            det += f"  |  PARKING {n_park}/3: {', '.join(park_cycle)}"
+        det += f"  ({len(self.fsm_rows)} transitions)"
+        p3["detail"] = det
+        res["tests"].append(p3)
 
-        res["total"] = sum(p["puntos"] for p in res["pruebas"])
-        res["max"]   = sum(p["max"] for p in res["pruebas"])
+        res["total"] = sum(p["points"] for p in res["tests"])
+        res["max"]   = sum(p["max"] for p in res["tests"])
         return res
 
-    def _board_text(self, res: dict, lang: str = "es") -> str:
-        """Renderiza el tablero en español ('es') o inglés ('en')."""
-        en = (lang == "en")
-        title = ("SCOREBOARD — Sim2Real Validation TMR 2026" if en
-                 else "TABLERO DE PUNTOS — Validación Sim2Real TMR 2026")
+    def _board_text(self, res: dict) -> str:
+        """Render the scoreboard (English)."""
+        title = "SCOREBOARD - Sim2Real Validation TMR 2026"
         lines = ["=" * 60, "  " + title, "=" * 60]
-        for p in res["pruebas"]:
-            barra = "█" * int(20 * p["puntos"] / p["max"]) if p["max"] else ""
-            nombre  = p.get("nombre_en"  if en else "nombre",  p["nombre"])
-            detalle = p.get("detalle_en" if en else "detalle", p["detalle"])
-            lines.append(f"  {nombre:<32} {p['puntos']:>3}/{p['max']:<3} {barra}")
-            lines.append(f"     → {detalle}")
+        for p in res["tests"]:
+            bar = "#" * int(20 * p["points"] / p["max"]) if p["max"] else ""
+            lines.append(f"  {p['name']:<32} {p['points']:>3}/{p['max']:<3} {bar}")
+            lines.append(f"     -> {p['detail']}")
         lines.append("-" * 60)
         pct = 100 * res["total"] / res["max"] if res["max"] else 0
         lines.append(f"  TOTAL: {res['total']}/{res['max']}  ({pct:.0f}%)")
-        if en:
-            veredicto = ("PASSED ✓" if pct >= 70 else
-                         "PARTIAL ⚠" if pct >= 40 else "REVIEW ✗")
-            lines.append(f"  VERDICT: {veredicto}")
-        else:
-            veredicto = ("APROBADO ✓" if pct >= 70 else
-                         "PARCIAL ⚠" if pct >= 40 else "REVISAR ✗")
-            lines.append(f"  VEREDICTO: {veredicto}")
+        verdict = ("PASSED" if pct >= 70 else
+                   "PARTIAL" if pct >= 40 else "REVIEW")
+        lines.append(f"  VERDICT: {verdict}")
         lines.append("=" * 60)
         return "\n".join(lines)
 
     def print_scoreboard(self) -> dict:
-        """Entrega en INGLÉS: imprime el tablero y guarda SCOREBOARD.txt."""
+        """Print the scoreboard and save SCOREBOARD.txt (English)."""
         res = self.evaluate()
-        txt = self._board_text(res, "en")
+        txt = self._board_text(res)
         print(txt)
         with open(os.path.join(self.outdir, "SCOREBOARD.txt"), "w",
                   encoding="utf-8") as f:

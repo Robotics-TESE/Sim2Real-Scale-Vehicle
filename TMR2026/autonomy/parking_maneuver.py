@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 parking_maneuver.py — Sub-máquina de estados para Estacionamiento en Batería.
 
@@ -74,28 +73,22 @@ class ParkingManeuver:
     si el coche los tiene.
     """
 
-    # Dirección del hueco: "left" o "right" (a qué lado está el espacio)
     def __init__(self, gap_side: str = "right"):
-        self.gap_side = gap_side  # lado donde está el espacio de estacionamiento
+        self.gap_side = gap_side
         self._state     = ParkingState.IDLE
         self._phase_start: float    = 0.0
         self._gap_detected_at: float = 0.0
-        self._gap_open_since: float  = 0.0   # cuando dejó de haber AUTO en zona lateral
+        self._gap_open_since: float  = 0.0
 
-        # Para decidir el ángulo de giro máximo
         if gap_side == "right":
-            self._lock_angle = SERVO_MAX_ANGLE    # giro máximo derecha
+            self._lock_angle = SERVO_MAX_ANGLE
             self._straight_angle = SERVO_CENTER_ANGLE
         else:
-            self._lock_angle = SERVO_MIN_ANGLE     # giro máximo izquierda
+            self._lock_angle = SERVO_MIN_ANGLE
             self._straight_angle = SERVO_CENTER_ANGLE
 
-        # Precalcular radio de giro en la maniobra (informativo)
         self._R_turn = self._calc_turning_radius()
 
-    # ----------------------------------------------------------
-    # API pública
-    # ----------------------------------------------------------
     @property
     def state(self) -> ParkingState:
         return self._state
@@ -148,7 +141,6 @@ class ParkingManeuver:
         now = time.monotonic()
         elapsed = now - self._phase_start
 
-        # ── Seguridad global: obstáculo frontal durante reversa ──
         if (self._state in (ParkingState.REVERSING_LOCK,
                              ParkingState.REVERSING_STRAIGHT)
                 and tof_distance_mm is not None
@@ -162,8 +154,6 @@ class ParkingManeuver:
         match self._state:
 
             case ParkingState.SEARCHING:
-                # Avanza despacio buscando el hueco.
-                # Prioridad: cámara (obj_result) > ToF (si disponible).
                 motor.set_throttle(PARK_SEARCH_SPEED)
                 steering.center()
 
@@ -175,7 +165,6 @@ class ParkingManeuver:
                     print(f"[PARKING] Hueco detectado. Posicionando...")
 
             case ParkingState.POSITIONING:
-                # Avanza un poco más para alinear el eje trasero
                 motor.set_throttle(PARK_SEARCH_SPEED)
                 steering.center()
 
@@ -184,7 +173,6 @@ class ParkingManeuver:
                     print("[PARKING] Posición lista. Iniciando reversa con giro...")
 
             case ParkingState.REVERSING_LOCK:
-                # Reversa con giro máximo hacia el hueco
                 motor.set_throttle(-PARK_MANEUVER_SPEED)
                 steering.set_angle(self._lock_angle)
 
@@ -194,7 +182,6 @@ class ParkingManeuver:
                     print("[PARKING] Arco completado. Enderezando...")
 
             case ParkingState.REVERSING_STRAIGHT:
-                # Endereza y termina de entrar
                 motor.set_throttle(-PARK_MANEUVER_SPEED)
                 steering.center()
 
@@ -205,13 +192,10 @@ class ParkingManeuver:
                     print("[PARKING] ¡Estacionamiento completado!")
 
             case ParkingState.PARKED | ParkingState.IDLE | ParkingState.ABORTED:
-                pass  # estado terminal, nada que hacer
+                pass
 
         return self._state
 
-    # ----------------------------------------------------------
-    # Cálculo de arco Ackermann
-    # ----------------------------------------------------------
     def _calc_turning_radius(self) -> float:
         """
         Radio de giro en la fase REVERSING_LOCK usando el ángulo máximo.
@@ -232,15 +216,11 @@ class ParkingManeuver:
         Longitud del arco para 90°: s = (π/2) * R
         Velocidad lineal aproximada (map 18% PWM → ~0.25 m/s en escala 1:10).
         """
-        SPEED_MS_APPROX = 0.20  # m/s a PARK_MANEUVER_SPEED — calibrar
+        SPEED_MS_APPROX = 0.20
         arc_length = (math.pi / 2) * self._R_turn
         estimated = arc_length / SPEED_MS_APPROX if SPEED_MS_APPROX > 0 else PARK_REVERSE_LOCK_SEC
-        # Usar el valor de config como límite superior de seguridad
         return min(estimated, PARK_REVERSE_LOCK_SEC)
 
-    # ----------------------------------------------------------
-    # Detección de hueco
-    # ----------------------------------------------------------
     def _detect_gap(self, tof_mm, obj_result, now: float) -> bool:
         """
         Combina cámara y ToF para decidir si hay un hueco de estacionamiento.
@@ -254,7 +234,6 @@ class ParkingManeuver:
         if obj_result is not None:
             return self._detect_gap_camera(obj_result, now)
 
-        # Fallback a ToF
         gap_open = (tof_mm is None or tof_mm >= PARK_MIN_GAP_MM)
         return gap_open and (now - self._phase_start) > 0.3
 
@@ -271,14 +250,14 @@ class ParkingManeuver:
 
         if lateral_clear:
             if self._gap_open_since == 0.0:
-                self._gap_open_since = now   # empieza a contar
+                self._gap_open_since = now
             gap_secs = now - self._gap_open_since
             return gap_secs >= PARK_GAP_CAMERA_MIN_SEC
         else:
-            self._gap_open_since = 0.0   # resetear si vuelve a aparecer un auto
+            self._gap_open_since = 0.0
             return False
 
     def _transition(self, new_state: ParkingState):
         self._state = new_state
         self._phase_start = time.monotonic()
-        self._gap_open_since = 0.0   # reset al cambiar de fase
+        self._gap_open_since = 0.0

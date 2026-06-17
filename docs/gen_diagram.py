@@ -1,9 +1,7 @@
-# -*- coding: utf-8 -*-
 """Diagrama de clases UML del sistema TMR 2026."""
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import os
 
-# Generar las imágenes junto a este script (docs/), sin rutas absolutas.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 S = 3
@@ -105,7 +103,6 @@ def open_arrow(d, tip, heading, color, w):
     line(d, a, tip, color, w)
     line(d, b, tip, color, w)
 
-# ---------- clases UML ----------
 CLASSES = {
     'VehicleTMR': {
         'attrs': ['- mode: str', '- running: bool'],
@@ -155,7 +152,6 @@ packages = [
     ('Actuacion',  ['MotorDriver', 'SteeringDriver', 'TurnSignals']),
 ]
 
-# ---------- geometria ----------
 MARGIN = 66
 PKG_GAP = 66
 PKG_TOP = 104
@@ -179,7 +175,6 @@ for pname, members in packages:
         cy += ch + CLS_GAP
     px += COL_W + PKG_GAP
 
-# ---------- sombras ----------
 shadow = Image.new('RGBA', img.size, (0, 0, 0, 0))
 sd = ImageDraw.Draw(shadow)
 for (x, y, w, h) in boxes.values():
@@ -188,17 +183,14 @@ shadow = shadow.filter(ImageFilter.GaussianBlur(3 * S))
 img = Image.alpha_composite(img, shadow)
 d = ImageDraw.Draw(img)
 
-# ---------- titulo ----------
 text_c(d, W / 2, 44, 'TMR 2026  -  Diagrama de Clases (UML)', f_title, INK)
 
-# ---------- paquetes ----------
 for (pname, x, y, w, h) in pkg_rects:
     tab_w = 168
     rect(d, [x, y, x + tab_w, y + TAB_H], fill=PKG_FILL, outline=PKG_BD, width=1.4)
     text_c(d, x + tab_w / 2, y + TAB_H / 2, pname, f_pkg, INK)
     rect(d, [x, y + TAB_H, x + w, y + h], fill=PKG_FILL, outline=PKG_BD, width=1.4)
 
-# ---------- clases ----------
 for name, (x, y, w, h) in boxes.items():
     c = CLASSES[name]
     rect(d, [x, y, x + w, y + h], fill=BODY_FILL, outline=INK, width=1.6)
@@ -216,7 +208,6 @@ for name, (x, y, w, h) in boxes.items():
         text_l(d, x + 14, ty, m, f_mem, INK)
         ty += LINE_H
 
-# ---------- relaciones ----------
 def edge(name, side, frac=0.5):
     x, y, w, h = boxes[name]
     if side == 'L':
@@ -227,7 +218,6 @@ def edge(name, side, frac=0.5):
         return (x + w * frac, y)
     return (x + w * frac, y + h)
 
-# composiciones internas verticales
 for (src, dst) in [('VehicleTMR', 'AutonomousFSM'), ('AutonomousFSM', 'PIDController'),
                    ('SignDetector', 'TemporalFilter')]:
     s = edge(src, 'B'); t = edge(dst, 'T')
@@ -235,7 +225,6 @@ for (src, dst) in [('VehicleTMR', 'AutonomousFSM'), ('AutonomousFSM', 'PIDContro
     solid(d, [(s[0], s[1] + 16), (s[0], t[1])], INK, 1.6)
     open_arrow(d, t, 'D', INK, 1.6)
 
-# VehicleTMR -> paquete Percepcion (3 lineas hacia la izquierda)
 fracs = [0.30, 0.5, 0.70]
 for k, (tname, fr) in enumerate(zip(['CameraStream', 'SignDetector', 'DistanceSensor'], fracs)):
     s = edge('VehicleTMR', 'L', fr)
@@ -245,7 +234,6 @@ for k, (tname, fr) in enumerate(zip(['CameraStream', 'SignDetector', 'DistanceSe
     solid(d, [(s[0] - 16, s[1]), (xm, s[1]), (xm, t[1]), t], INK, 1.6)
     open_arrow(d, t, 'L', INK, 1.6)
 
-# AutonomousFSM -> paquete Actuacion (3 lineas hacia la derecha)
 for k, (tname, fr) in enumerate(zip(['MotorDriver', 'SteeringDriver', 'TurnSignals'], fracs)):
     s = edge('AutonomousFSM', 'R', fr)
     t = edge(tname, 'L', 0.5)
@@ -254,7 +242,6 @@ for k, (tname, fr) in enumerate(zip(['MotorDriver', 'SteeringDriver', 'TurnSigna
     solid(d, [(s[0] + 16, s[1]), (xm, s[1]), (xm, t[1]), t], INK, 1.6)
     open_arrow(d, t, 'R', INK, 1.6)
 
-# dependencias: LanePipeline / SignDetector ..> CameraStream
 for src, fr in [('LanePipeline', 0.72), ('SignDetector', 0.5)]:
     s = edge(src, 'L', 0.5)
     t = edge('CameraStream', 'L', fr)
@@ -262,7 +249,6 @@ for src, fr in [('LanePipeline', 0.72), ('SignDetector', 0.5)]:
     dashed(d, [s, (xm, s[1]), (xm, t[1]), t], INK, 1.5)
     open_arrow(d, t, 'R', INK, 1.5)
 
-# ---------- leyenda ----------
 ly = H - 36
 lx = MARGIN
 diamond(d, (lx + 16, ly), 'L', INK)
@@ -274,7 +260,6 @@ dashed(d, [(lx, ly), (lx + 58, ly)], INK, 1.5)
 open_arrow(d, (lx + 58, ly), 'R', INK, 1.5)
 text_l(d, lx + 70, ly - 8, 'dependencia (usa)', f_leg, INK)
 
-# ---------- exportar ----------
 out = img.convert('RGB').resize((W, H), Image.LANCZOS)
 out.save('TMR2026_ARCHITECTURE_SIMPLIFIED.png', 'PNG')
 out.save('TMR2026_ARCHITECTURE_SIMPLIFIED.pdf', 'PDF', resolution=150)

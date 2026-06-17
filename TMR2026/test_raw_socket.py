@@ -20,7 +20,6 @@ except Exception as e:
     print(f"[RAW] ✗ ERROR conectando: {e}")
     exit(1)
 
-# Enviar un comando para asegurar que Unity sabe que estamos aqui
 s.sendall(b"MOTOR:0\n")
 print("[RAW] Enviado: MOTOR:0\\n")
 
@@ -38,7 +37,6 @@ while time.time() - start < 10:
             print("[RAW] Socket cerrado por servidor")
             break
         total_bytes += len(data)
-        # Mostrar los primeros 20 bytes del primer chunk
         if total_recv_calls <= 3:
             preview = data[:30]
             print(f"[RAW] recv #{total_recv_calls}: +{len(data)} bytes | preview: {preview!r}")

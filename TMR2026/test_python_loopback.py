@@ -10,7 +10,7 @@ import socket
 import threading
 import time
 
-PORT = 5006  # uso 5006 para no chocar con Unity en 5005
+PORT = 5006
 
 def server_thread():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -20,7 +20,6 @@ def server_thread():
     print(f"[SERVER] Escuchando en 127.0.0.1:{PORT}...")
     conn, addr = s.accept()
     print(f"[SERVER] Cliente conectado desde {addr}")
-    # Enviar 30 mensajes rapidos como hace Unity
     for i in range(30):
         msg = f"TOF:{500 + i},{2000 - i}\n".encode()
         conn.sendall(msg)
@@ -29,12 +28,10 @@ def server_thread():
     conn.close()
     s.close()
 
-# Lanzar servidor en thread
 t = threading.Thread(target=server_thread, daemon=True)
 t.start()
-time.sleep(0.5)  # dar tiempo a que arranque
+time.sleep(0.5)
 
-# Cliente
 print(f"[CLIENT] Conectando a 127.0.0.1:{PORT}...")
 c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 c.settimeout(3.0)

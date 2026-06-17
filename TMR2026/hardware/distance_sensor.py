@@ -1,19 +1,17 @@
-# -*- coding: utf-8 -*-
-"""
-distance_sensor.py — Dos VL53L0X opcionales en I²C bus 4 (GPIO 22/23).
+"""Two optional VL53L0X sensors on I2C bus 4 (GPIO 22/23).
 
-Si los sensores no están conectados el sistema sigue funcionando
-y todas las lecturas devuelven None. El modo autónomo usa entonces
-solo la cámara para estimar distancias.
+If the sensors are not connected the system keeps running and every reading
+returns None. Autonomous mode then relies only on the camera to estimate
+distances.
 
-Cableado:
-  SDA        → GPIO 23 (Pin 16)
-  SCL        → GPIO 22 (Pin 15)
-  XSHUT front → GPIO 24 (Pin 18)  — libre, reservado para lidar frontal futuro
-  XSHUT rear  → GPIO 27 (Pin 13)
+Wiring:
+  SDA         -> GPIO 23 (Pin 16)
+  SCL         -> GPIO 22 (Pin 15)
+  XSHUT front -> GPIO 24 (Pin 18)  -- free, reserved for a future front lidar
+  XSHUT rear  -> GPIO 27 (Pin 13)
 
-Si el sensor frontal no responde (no está conectado físicamente) el rear
-sigue funcionando y el sistema degrada con gracia: front_mm queda en None.
+If the front sensor does not respond (not physically connected) the rear one
+keeps working and the system degrades gracefully: front_mm stays None.
 """
 
 import threading
@@ -27,12 +25,12 @@ from config import (
     TOF_TIMING_BUDGET_US, TOF_MAX_RANGE_MM, TOF_POLL_INTERVAL_S,
 )
 
-_CHIP = 4   # GPIO chip Pi 5
+_CHIP = 4
 
 
 class DistanceSensor:
     """
-    Gestiona dos VL53L0X. Si no están disponibles, retorna None siempre.
+    Manages two VL53L0X sensors. If unavailable, always returns None.
     """
 
     def __init__(self):
@@ -40,18 +38,16 @@ class DistanceSensor:
         self._front = None
         self._rear  = None
 
-        # Abrir chip GPIO para los pines XSHUT
         self._h = lgpio.gpiochip_open(_CHIP)
-        lgpio.gpio_claim_output(self._h, PIN_TOF_XSHUT_FRONT, 0, 0)  # LOW
-        lgpio.gpio_claim_output(self._h, PIN_TOF_XSHUT_REAR,  0, 0)  # LOW
+        lgpio.gpio_claim_output(self._h, PIN_TOF_XSHUT_FRONT, 0, 0)
+        lgpio.gpio_claim_output(self._h, PIN_TOF_XSHUT_REAR,  0, 0)
 
         try:
             import adafruit_vl53l0x
             from adafruit_extended_bus import ExtendedI2C
 
-            i2c = ExtendedI2C(4)  # /dev/i2c-4 (GPIO 22=SCL, GPIO 23=SDA)
+            i2c = ExtendedI2C(4)
 
-            # 1. Sensor frontal (si existe) → cambiar dirección a 0x30
             lgpio.gpio_write(self._h, PIN_TOF_XSHUT_FRONT, 1)
             time.sleep(0.1)
             try:
@@ -59,32 +55,30 @@ class DistanceSensor:
                 front.set_address(TOF_ADDR_FRONT)
                 front.measurement_timing_budget = TOF_TIMING_BUDGET_US
                 self._front = front
-                print(f"[TOF] Frontal OK @ 0x{TOF_ADDR_FRONT:02X}")
+                print(f"[TOF] Front OK @ 0x{TOF_ADDR_FRONT:02X}")
             except Exception as e:
                 self._front = None
-                print(f"[TOF] Frontal no detectado ({e}) — degradando a rear-only")
+                print(f"[TOF] Front not detected ({e}) - degrading to rear-only")
 
-            # 2. Sensor trasero → queda en 0x29 (default)
             lgpio.gpio_write(self._h, PIN_TOF_XSHUT_REAR, 1)
             time.sleep(0.1)
             try:
                 rear = adafruit_vl53l0x.VL53L0X(i2c)
                 rear.measurement_timing_budget = TOF_TIMING_BUDGET_US
                 self._rear = rear
-                print(f"[TOF] Trasero OK @ 0x{TOF_ADDR_REAR:02X}")
+                print(f"[TOF] Rear OK @ 0x{TOF_ADDR_REAR:02X}")
             except Exception as e:
                 self._rear = None
-                print(f"[TOF] Trasero no detectado ({e})")
+                print(f"[TOF] Rear not detected ({e})")
 
             self._available = (self._front is not None) or (self._rear is not None)
             if not self._available:
-                print("[TOF] Ningún sensor responde — continuando sin ToF")
+                print("[TOF] No sensor responds - continuing without ToF")
 
         except Exception as e:
-            # Algo más profundo falló (driver / bus I²C) — desactivar todo
             lgpio.gpio_write(self._h, PIN_TOF_XSHUT_FRONT, 1)
             lgpio.gpio_write(self._h, PIN_TOF_XSHUT_REAR,  1)
-            print(f"[TOF] Init falló ({e}) — continuando sin ToF")
+            print(f"[TOF] Init failed ({e}) - continuing without ToF")
 
         self._front_mm: float | None = None
         self._rear_mm:  float | None = None
@@ -92,7 +86,6 @@ class DistanceSensor:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
-    # ----------------------------------------------------------
     def start(self):
         if not self._available:
             return
@@ -109,7 +102,6 @@ class DistanceSensor:
         lgpio.gpio_free(self._h, PIN_TOF_XSHUT_REAR)
         lgpio.gpiochip_close(self._h)
 
-    # ----------------------------------------------------------
     @property
     def front_mm(self) -> float | None:
         with self._lock:
@@ -122,14 +114,13 @@ class DistanceSensor:
 
     @property
     def distance_mm(self) -> float | None:
-        """Alias frontal para compatibilidad con el resto del código."""
+        """Front alias for compatibility with the rest of the code."""
         return self.front_mm
 
     def is_obstacle_near(self, threshold_mm: float) -> bool:
         d = self.front_mm
         return d is not None and d < threshold_mm
 
-    # ----------------------------------------------------------
     def _poll_loop(self):
         while not self._stop_event.is_set():
             try:

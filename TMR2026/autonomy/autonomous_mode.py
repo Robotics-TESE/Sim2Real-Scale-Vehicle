@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 autonomous_mode.py — Controlador autónomo TMR 2026.
 
@@ -53,10 +52,9 @@ class AutoState(Enum):
     CROSSWALK_RESUME  = auto()
     PARKING           = auto()
     OBSTACLE_HOLD     = auto()
-    # ── Maniobra de rebase ──────────────────────────────────
-    OVERTAKING_LEFT   = auto()   # girando al carril contrario
-    OVERTAKING_PASS   = auto()   # pasando el obstáculo
-    OVERTAKING_RETURN = auto()   # regresando al carril propio
+    OVERTAKING_LEFT   = auto()
+    OVERTAKING_PASS   = auto()
+    OVERTAKING_RETURN = auto()
 
 
 class AutonomousController:
@@ -88,10 +86,8 @@ class AutonomousController:
         self._led_last_toggle: float  = 0.0
         self._led_on: bool            = False
 
-        # Guardar último bbox del STOP para estimación de distancia por cámara
         self._last_stop_bbox: Optional[tuple] = None
 
-    # ----------------------------------------------------------
     def activate(self):
         self._state = AutoState.LANE_FOLLOWING
         self._steer_pid.reset()
@@ -117,7 +113,6 @@ class AutonomousController:
     def current_state(self) -> AutoState:
         return self._state
 
-    # ----------------------------------------------------------
     def update(
         self,
         lane: LaneData,
@@ -127,10 +122,8 @@ class AutonomousController:
     ):
         """Llamar una vez por ciclo del bucle principal."""
 
-        # ── Distancia al STOP: ToF tiene prioridad, luego bbox ──
         stop_dist_mm = self._resolve_stop_distance(obj_result, tof_mm)
 
-        # ── Emergencia global por ToF ──
         if (self._state not in (AutoState.PARKING,)
                 and tof_mm is not None
                 and tof_mm < EMERGENCY_STOP_MM):
@@ -174,34 +167,26 @@ class AutonomousController:
             case AutoState.OVERTAKING_RETURN:
                 self._do_overtaking_return(lane, dt)
 
-    # ----------------------------------------------------------
-    # Sub-estados
-    # ----------------------------------------------------------
     def _do_lane_following(self, lane, obj_result, stop_dist_mm, dt):
-        # Freno si no hay pista visible — el carro no puede avanzar sin carril
         if lane.confidence < LANE_MIN_CONFIDENCE:
             self.motor.brake()
             self.steering.center()
             print("\r[AUTO] Sin pista — esperando carril...          ", end="", flush=True)
             return
 
-        # ── Obstáculo en carril → rebase ───────────────────────
         if obj_result.car_in_lane:
             print("\n[AUTO] Obstáculo en carril → iniciando rebase")
             self._transition(AutoState.OVERTAKING_LEFT)
             return
 
-        # Crucero peatonal tiene prioridad sobre STOP
         if lane.crosswalk_detected:
             self._transition(AutoState.CROSSWALK_STOP)
             return
 
-        # Señal STOP detectada y suficientemente cerca para empezar a frenar
         if stop_dist_mm is not None and stop_dist_mm < STOP_BRAKE_START_MM:
             self._transition(AutoState.APPROACHING_STOP)
             return
 
-        # Semáforo rojo
         if (obj_result.traffic_light is not None
                 and obj_result.traffic_light.color == "red"):
             self.motor.brake()
@@ -214,7 +199,6 @@ class AutonomousController:
     def _do_approaching_stop(self, lane, stop_dist_mm, dt):
         """Frena progresivamente hasta quedar a ≤30 cm de la señal."""
         if stop_dist_mm is None:
-            # Perdimos la señal — freno conservador
             self.motor.set_throttle(SPEED_APPROACH * 0.4)
             self._apply_steering(lane, dt)
             return
@@ -226,7 +210,6 @@ class AutonomousController:
             self._transition(AutoState.STOPPED_WAIT)
             return
 
-        # Velocidad proporcional a la distancia restante (mínimo 5%)
         speed = self._stop_pid.compute(stop_dist_mm, dt)
         self.motor.set_throttle(max(speed, 5.0))
         self._apply_steering(lane, dt)
@@ -276,16 +259,13 @@ class AutonomousController:
         if t >= 1.0:
             self._transition(AutoState.LANE_FOLLOWING)
 
-    # ----------------------------------------------------------
-    # Maniobra de rebase
-    # ----------------------------------------------------------
     def _do_overtaking_left(self, dt):
         """
         Fase 1: giro hacia el carril contrario (izquierda).
         Dura OVERTAKE_LEFT_SEC segundos con ángulo fijo.
         """
         elapsed = time.monotonic() - self._overtake_start
-        steer_angle = SERVO_CENTER_ANGLE - OVERTAKE_STEER_DEG  # izquierda
+        steer_angle = SERVO_CENTER_ANGLE - OVERTAKE_STEER_DEG
         self.steering.set_angle(steer_angle)
         self.motor.set_throttle(SPEED_CURVE)
         print(f"\r[REBASE] Izquierda {elapsed:.1f}/{OVERTAKE_LEFT_SEC:.1f}s   ", end="", flush=True)
@@ -310,7 +290,7 @@ class AutonomousController:
         Dura OVERTAKE_RETURN_SEC segundos, luego vuelve a LANE_FOLLOWING.
         """
         elapsed = time.monotonic() - self._overtake_start
-        steer_angle = SERVO_CENTER_ANGLE + OVERTAKE_STEER_DEG  # derecha
+        steer_angle = SERVO_CENTER_ANGLE + OVERTAKE_STEER_DEG
         self.steering.set_angle(steer_angle)
         self.motor.set_throttle(SPEED_CURVE)
         print(f"\r[REBASE] Regreso  {elapsed:.1f}/{OVERTAKE_RETURN_SEC:.1f}s  ", end="", flush=True)
@@ -318,9 +298,6 @@ class AutonomousController:
             print()
             self._transition(AutoState.LANE_FOLLOWING)
 
-    # ----------------------------------------------------------
-    # Helpers
-    # ----------------------------------------------------------
     def _resolve_stop_distance(
         self,
         obj_result: ObjectDetector.AnalysisResult,
@@ -334,18 +311,16 @@ class AutonomousController:
             self._last_stop_bbox = None
             return None
 
-        # ToF disponible y en rango útil
         if tof_mm is not None and tof_mm < 1000:
             return tof_mm
 
-        # Estimación por bbox
         bbox = obj_result.stop_sign_bbox
         if bbox:
             self._last_stop_bbox = bbox
-            h_px = bbox[3] - bbox[1]   # y2 - y1
+            h_px = bbox[3] - bbox[1]
             if h_px > 5:
                 dist_m = (STOP_SIGN_REAL_HEIGHT_M * CAMERA_FOCAL_LENGTH_PX) / h_px
-                return dist_m * 1000   # → mm
+                return dist_m * 1000
 
         return None
 
@@ -383,4 +358,4 @@ class AutonomousController:
 
     @staticmethod
     def _set_led(pin: int, state: bool):
-        pass   # LEDs gestionados por main.py vía lgpio
+        pass

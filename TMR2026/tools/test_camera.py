@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 test_camera.py — Preview combinado cámara + lane pipeline + PID + YOLO.
 
@@ -22,7 +21,6 @@ import sys
 import time
 from pathlib import Path
 
-# Permitir ejecución desde cualquier CWD: agregar TMR2026/ al sys.path.
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -35,7 +33,6 @@ from vision.sign_detector    import SignDetector
 from control.pid_controller  import PIDController
 
 
-# ── Mismas constantes que main.py ──────────────────────────────────────────────
 CAMERA_W, CAMERA_H, CAMERA_FPS = 640, 480, 30
 SERVO_CENTER, SERVO_MIN, SERVO_MAX = 90.0, 45.0, 135.0
 PID_KP, PID_KI, PID_KD = 0.08, 0.002, 0.025
@@ -64,10 +61,8 @@ def draw_overlay(frame, lane_pipe, lane, pid, angle_target, fps, dets):
     """Replica _render_debug_view de main.py (sin motor/FSM/lidar reales)."""
     H, W = frame.shape[:2]
 
-    # Frame con línea central del carril dibujada por el propio pipeline.
     vis = lane_pipe.draw_debug(frame, lane)
 
-    # ── Mosaico superior: BEV + máscara HSV ──
     if lane.bev_frame is not None and lane.mask_frame is not None:
         vis[0:180, 0:320]   = cv2.resize(lane.bev_frame,  (320, 180))
         vis[0:180, 320:640] = cv2.resize(lane.mask_frame, (320, 180))
@@ -76,7 +71,6 @@ def draw_overlay(frame, lane_pipe, lane, pid, angle_target, fps, dets):
         cv2.putText(vis, "Mascara HSV blanco",   (328, 14),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
-    # ── Panel inferior izquierdo: PID + error + lidar(—) ──
     _draw_panel(vis, 8, 200, 320, 160, lines=[
         f"MODO  : TEST",
         f"err   :{lane.error_px:+7.1f}px  conf:{lane.confidence:.0%}",
@@ -87,7 +81,6 @@ def draw_overlay(frame, lane_pipe, lane, pid, angle_target, fps, dets):
         f"lidar :---     FPS:{fps:5.1f}",
     ])
 
-    # ── Panel inferior derecho: objetos detectados ──
     if dets:
         obj_lines = ["OBJETOS DETECTADOS:"]
         for d in dets[:5]:
@@ -100,12 +93,10 @@ def draw_overlay(frame, lane_pipe, lane, pid, angle_target, fps, dets):
         ]
     _draw_panel(vis, 336, 200, 296, 160, lines=obj_lines)
 
-    # ── Barra inferior con label de modo (no hay FSM en el test) ──
     cv2.putText(vis, f"TEST  duty:  0%   ('q'/ESC salir)",
                 (8, H - 10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2, cv2.LINE_AA)
 
-    # ── Bounding boxes YOLO (AL FINAL: siempre encima de mosaico + paneles) ──
     for d in dets:
         cv2.rectangle(vis, (d.x1, d.y1), (d.x2, d.y2), (0, 255, 0), 2)
         dist_txt = f" {(d.distance_m or 0) * 100:.0f}cm" if d.distance_m else ""
@@ -162,7 +153,6 @@ def main():
 
             lane = lane_pipe.process(frame)
 
-            # PID — solo cómputo, no toca el servo.
             correction = pid.compute(lane.error_px, dt)
             angle_target = max(
                 SERVO_MIN, min(SERVO_MAX, SERVO_CENTER + correction)

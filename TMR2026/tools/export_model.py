@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 export_model.py — Exporta weights/tmr_signs.pt a NCNN para la Raspberry Pi 5.
 
@@ -23,11 +22,9 @@ import argparse
 import sys
 from pathlib import Path
 
-HERE    = Path(__file__).resolve().parent.parent   # TMR2026/
+HERE    = Path(__file__).resolve().parent.parent
 WEIGHTS = HERE / "weights" / "tmr_signs.pt"
 
-# imgsz por defecto = 320: el MISMO con el que se validó el sistema
-# (SignDetector usa imgsz=320 en el Pi y en el simulador).
 DEFAULT_IMGSZ = 320
 
 
@@ -49,8 +46,6 @@ def main() -> int:
     model = YOLO(str(args.weights))
     print(f"[EXPORT] Clases: {model.names}")
 
-    # half=True: FP16 — la A76 de la Pi 5 lo acelera y el tamaño baja a la
-    # mitad. La pérdida de precisión es despreciable para detección.
     print(f"[EXPORT] Exportando a NCNN (imgsz={args.imgsz}, FP16) ...")
     out = model.export(format="ncnn", imgsz=args.imgsz, half=True)
 

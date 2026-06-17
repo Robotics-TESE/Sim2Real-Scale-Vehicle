@@ -1,23 +1,21 @@
-# -*- coding: utf-8 -*-
-"""
-parking_fsm.py — Maniobra de ESTACIONAMIENTO EN BATERÍA (perpendicular).
+"""Perpendicular (battery) PARKING manoeuvre.
 
-Sub-máquina de estados para la Prueba 3 del PDF "Validación Sim2Real":
-   VISION → AUTONOMOUS → PARKING_SEARCH → PARKING_MANEUVER → PARKED
+State sub-machine for Test 3 of the "Sim2Real Validation" specification:
+   VISION -> AUTONOMOUS -> PARKING_SEARCH -> PARKING_MANEUVER -> PARKED
 
-Diseño:
-  • PARKING_SEARCH: avanza despacio por el carril buscando el hueco. Lo
-    detecta con el ToF lateral/frontal (o por tiempo si no hay sensor).
-  • PARKING_MANEUVER: maniobra en lazo abierto por TIEMPO (igual que el
-    estacionamiento real del coche): gira a la derecha y avanza para entrar
-    perpendicular al cajón, luego endereza.
-  • PARKED: motor a 0, estacionado.
+Design:
+  - PARKING_SEARCH: drives slowly along the lane looking for the gap. It is
+    detected with the side/front ToF (or by time if there is no sensor).
+  - PARKING_MANEUVER: open-loop, time-based manoeuvre (just like the car's
+    real parking): steers right and drives in perpendicular to the bay,
+    then straightens.
+  - PARKED: motor at 0, parked.
 
-Garantías (como el resto del proyecto):
-  • Usa time.monotonic(), NUNCA time.sleep() — el bucle nunca se bloquea.
-  • brake() es corte inmediato; no se modifica.
+Guarantees (like the rest of the project):
+  - Uses time.monotonic(), NEVER time.sleep() -- the loop never blocks.
+  - brake() is an instantaneous cut; it is not modified.
 
-Tiempos calibrables desde config.py (PARK_*). Si no existen, usa defaults.
+Timings are calibratable from config.py (PARK_*). If absent, defaults apply.
 """
 
 import time
@@ -40,29 +38,27 @@ except ImportError:
 
 
 class ParkingState(Enum):
-    PARKING_SEARCH   = auto()   # busca el hueco
-    PARKING_MANEUVER = auto()   # maniobra de entrada
-    PARKED           = auto()   # estacionado
+    PARKING_SEARCH   = auto()
+    PARKING_MANEUVER = auto()
+    PARKED           = auto()
 
 
 class ParkingFSM:
     """
-    Estacionamiento en batería. Uso::
+    Battery parking. Usage::
 
         pk = ParkingFSM(motor, steering)
         pk.activate()
         while running:
-            pk.lidar_mm = sensor.front_mm   # opcional (detección de hueco)
-            pk.update(dt)                    # 50 Hz, no bloquea
+            pk.lidar_mm = sensor.front_mm   # optional (gap detection)
+            pk.update(dt)                    # 50 Hz, non-blocking
             if pk.state == ParkingState.PARKED: break
     """
 
-    # ── Tiempos de la maniobra (s) — calibrables ──────────────────────────────
-    SEARCH_MIN_S   = 1.5     # mínimo buscando antes de aceptar el hueco
-    SEARCH_MAX_S   = 4.0     # tope de búsqueda antes de maniobrar de todos modos
-    TURN_IN_S      = 2.2     # girar+avanzar para entrar perpendicular
-    STRAIGHTEN_S   = 1.2     # enderezar dentro del cajón
-    # Umbral de hueco: el ToF frontal sube por encima de esto al pasar el hueco
+    SEARCH_MIN_S   = 1.5
+    SEARCH_MAX_S   = 4.0
+    TURN_IN_S      = 2.2
+    STRAIGHTEN_S   = 1.2
     GAP_FRONT_MM   = 600
 
     SEARCH_SPEED   = float(PARK_SEARCH_SPEED)
@@ -72,20 +68,18 @@ class ParkingFSM:
         self.motor = motor
         self.steering = steering
 
-        self.lidar_mm = None         # distancia frontal (opcional)
+        self.lidar_mm = None
         self._state = ParkingState.PARKING_SEARCH
-        self._t_state = 0.0          # momento en que se entró al estado
+        self._t_state = 0.0
         self._active = False
-        # Sub-fase de la maniobra: 0 = girar+entrar, 1 = enderezar
         self._man_phase = 0
 
-    # ─── Ciclo de vida ──────────────────────────────────────────────────────────
     def activate(self):
         self._state = ParkingState.PARKING_SEARCH
         self._t_state = time.monotonic()
         self._man_phase = 0
         self._active = True
-        print("[PARK] Estacionamiento ACTIVADO → PARKING_SEARCH")
+        print("[PARK] Parking ENABLED -> PARKING_SEARCH")
 
     def deactivate(self):
         self._active = False
@@ -104,11 +98,10 @@ class ParkingFSM:
         return time.monotonic() - self._t_state
 
     def _go(self, new_state: ParkingState):
-        print(f"[PARK] {self._state.name} → {new_state.name}")
+        print(f"[PARK] {self._state.name} -> {new_state.name}")
         self._state = new_state
         self._t_state = time.monotonic()
 
-    # ─── Tick (50 Hz) ─────────────────────────────────────────────────────────────
     def update(self, dt: float):
         if not self._active:
             return
@@ -122,28 +115,23 @@ class ParkingFSM:
             self.steering.set_angle(SERVO_CENTER_ANGLE)
 
     def _do_search(self):
-        # Avanza recto y despacio buscando el hueco
         self.steering.set_angle(SERVO_CENTER_ANGLE)
         self.motor.set_speed(self.SEARCH_SPEED)
 
-        # Buscar al menos SEARCH_MIN_S antes de aceptar el hueco (búsqueda real)
-        hueco = (self._elapsed() >= self.SEARCH_MIN_S
-                 and self.lidar_mm is not None
-                 and self.lidar_mm >= self.GAP_FRONT_MM)
-        # Maniobra cuando detecta hueco O cuando agota el tiempo de búsqueda
-        if hueco or self._elapsed() >= self.SEARCH_MAX_S:
+        gap = (self._elapsed() >= self.SEARCH_MIN_S
+               and self.lidar_mm is not None
+               and self.lidar_mm >= self.GAP_FRONT_MM)
+        if gap or self._elapsed() >= self.SEARCH_MAX_S:
             self._man_phase = 0
             self._go(ParkingState.PARKING_MANEUVER)
 
     def _do_maneuver(self):
-        # Fase 0: girar ruedas a la DERECHA y avanzar → entra perpendicular
         if self._man_phase == 0:
-            self.steering.set_angle(SERVO_MAX_ANGLE)      # derecha máxima
+            self.steering.set_angle(SERVO_MAX_ANGLE)
             self.motor.set_speed(self.MANEUVER_SPEED)
             if self._elapsed() >= self.TURN_IN_S:
                 self._man_phase = 1
                 self._t_state = time.monotonic()
-        # Fase 1: enderezar y entrar al fondo del cajón
         elif self._man_phase == 1:
             self.steering.set_angle(SERVO_CENTER_ANGLE)
             self.motor.set_speed(self.MANEUVER_SPEED * 0.7)
@@ -151,4 +139,4 @@ class ParkingFSM:
                 self.motor.brake()
                 self.steering.set_angle(SERVO_CENTER_ANGLE)
                 self._go(ParkingState.PARKED)
-                print("[PARK] ✔ Estacionado en batería (PARKED)")
+                print("[PARK] Battery-parked (PARKED)")
